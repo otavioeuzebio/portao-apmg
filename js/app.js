@@ -682,7 +682,7 @@ function criarUsuarioUI(geral) {
   openSheet(geral ? 'Conta geral da guarda' : 'Criar usuário', `
     <p class="count">${geral
       ? 'Uma conta única para os celulares fixos do portão. Ela só abre nos celulares que você autorizar pelo código que aparece na tela deles. Em cada serviço, o app pede o nome do sentinela.'
-      : 'Crie o acesso com e-mail e senha e passe a senha para a pessoa. Se o e-mail já tiver conta (ex.: da Agenda do Cadete), o acesso é liberado e ela continua com a senha que já usa.'}</p>
+      : 'Crie o acesso com e-mail e senha e passe a senha para a pessoa. Se o e-mail já tiver conta no Portão, o acesso é liberado e a pessoa continua com a senha que já usa.'}</p>
     <form class="view" id="cuForm" autocomplete="off">
       <label class="f" for="cuNome">${geral ? 'Nome da conta' : 'Nome (posto/graduação e nome)'}<input id="cuNome" value="${geral ? 'Guarda APMG' : ''}"></label>
       <label class="f" for="cuEmail">E-mail de login *<input type="email" id="cuEmail" autocomplete="off" placeholder="${geral ? 'Ex.: guarda.apmg@gmail.com' : 'nome@exemplo.com'}"></label>
@@ -705,7 +705,7 @@ function criarUsuarioUI(geral) {
     try {
       const r = await Dados.criarUsuario({ email, senha, nome: $('#cuNome').value.trim(), papel: $('#cuPapel').value, geral, maxDispositivos: geral ? Math.max(1, Math.min(6, +$('#cuMax').value || 2)) : 0 });
       openSheet(geral ? 'Conta geral criada' : 'Usuário criado', `<div class="verdict ok"><h3>${r.jaExistia ? 'Acesso liberado' : 'Conta criada'}</h3><p>${esc(email)}</p></div>
-        ${r.jaExistia ? '<p>Este e-mail já tinha conta. A senha digitada <b>não</b> foi trocada: a pessoa entra com a senha que já usa (ou usa "Esqueci a senha").</p>' : `<p>Passe para a pessoa: e-mail <b>${esc(email)}</b> e a senha que você definiu. Ela já pode entrar, sem confirmar o e-mail.</p>`}
+        ${r.jaExistia ? '<p>Este e-mail já tinha conta no Portão. A senha digitada <b>não</b> foi trocada: a pessoa entra com a senha que já usa (ou usa "Esqueci a senha").</p>' : `<p>Passe para a pessoa: e-mail <b>${esc(email)}</b> e a senha que você definiu. Ela já pode entrar, sem confirmar o e-mail.</p>`}
         ${geral ? '<p>Agora, em cada celular da guarda: abra o app, escolha "Com a guarda", entre com esta conta e anote o código que aparece. Depois autorize os códigos em Mais → Acessos ao Portão.</p>' : ''}
         <button class="btn primary" id="cuOk" type="button">Concluir</button>`);
       $('#cuOk').onclick = () => { closeSheet(); renderAcessos(); };
@@ -836,7 +836,7 @@ function gateEscolha() {
 }
 function gateEntrar(tela = 'entrar') {
   const criar = tela === 'criar';
-  gate(`<h1>${criar ? 'Criar conta' : 'Entrar'}</h1><p>${criar ? 'Depois de confirmar o e-mail, o administrador libera seu acesso ao Portão.' : 'Use seu e-mail e senha. A conta da Agenda do Cadete também serve.'}</p>
+  gate(`<h1>${criar ? 'Criar conta' : 'Entrar'}</h1><p>${criar ? 'Depois de confirmar o e-mail, o administrador libera seu acesso ao Portão.' : 'Use o e-mail e a senha da sua conta do Portão.'}</p>
     <form id="gForm" class="view" autocomplete="on">
       <label class="f" for="gEmail">E-mail<input type="email" id="gEmail" autocomplete="username" required></label>
       <label class="f" for="gSenha">Senha<input type="password" id="gSenha" autocomplete="${criar ? 'new-password' : 'current-password'}" minlength="6" required></label>

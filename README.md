@@ -41,7 +41,7 @@ https://otavioeuzebio.github.io/portao-apmg/
   Fotos em lote pelo nome do arquivo (`BRA2E19.jpg`).
 - **Dois modos**:
   - **Com a guarda (nuvem)**: todos os celulares do portão veem o mesmo cadastro, agendados, lista de alerta e livro.
-    Funciona sem internet e sincroniza depois. Login por e-mail (a conta da Agenda do Cadete serve), com acesso liberado
+    Funciona sem internet e sincroniza depois. Login por e-mail e senha, com acesso liberado
     pelo administrador. Papéis: **sentinela** (consulta e registra) e **gestor** (também edita).
     O administrador também **cria usuários com e-mail e senha** dentro do app (entram sem confirmar e-mail) e uma
     **conta geral da guarda**, que só abre nos celulares autorizados pelo código exibido em cada aparelho (padrão: 2).
@@ -50,15 +50,15 @@ https://otavioeuzebio.github.io/portao-apmg/
 
 ## Configuração da nuvem (uma vez, pelo administrador)
 
-O Portão usa o **mesmo projeto Firebase da Agenda** (`agenda-esfo`). As regras do Portão já estão no
-`firestore.rules` do repositório **agendaesfo** (bloco "Portão APMG"; cópia em `firestore-portao.rules`).
+O Portão usa um **projeto Firebase próprio**: `portaoapmg` (ID `portaoapgm`), configurado em `js/config.js`.
 
-1. Firebase → Firestore Database → **Regras** → cole o conteúdo de `agendaesfo/firestore.rules` → **Publicar**.
-2. Firebase → Authentication → Settings → **Domínios autorizados**: confira se `otavioeuzebio.github.io` está na lista.
-3. Abra o Portão, escolha **Com a guarda** e entre com a conta de administrador (`js/config.js`).
-4. Cada sentinela entra com a própria conta; o pedido aparece em **Mais → Acessos ao Portão** para liberar
-   como sentinela ou gestor.
-5. Se você já tinha cadastro no modo local, use **Mais → Enviar para a nuvem o cadastro deste aparelho**.
+1. Authentication → Método de login → **E-mail/senha** ativado; Configurações → Domínios autorizados com
+   `otavioeuzebio.github.io`.
+2. Firestore Database criado; em **Regras**, cole o arquivo `firestore.rules` deste repositório → **Publicar**.
+3. Abra o app, escolha **Com a guarda**, toque em "Não tenho conta — criar" e crie a conta do administrador
+   (`otaviosilva.oe@gmail.com`, o mesmo de `js/config.js` e de `admin()` nas regras); confirme o e-mail.
+4. Em **Mais → Acessos ao Portão**, crie os usuários e a conta geral da guarda, ou libere os pedidos.
+5. Se já havia cadastro no modo local, use **Mais → Enviar para a nuvem o cadastro deste aparelho**.
 
 Para usar só no modo local, deixe `apiKey` vazio em `js/config.js`.
 

@@ -1,6 +1,6 @@
 /* Camada de dados.
    Modo "local": tudo no IndexedDB deste aparelho.
-   Modo "nuvem": Firestore (projeto da Agenda) com cache offline — todos os celulares
+   Modo "nuvem": Firestore (projeto próprio do Portão) com cache offline — todos os celulares
    da guarda veem o mesmo cadastro, lista de alerta, agendados e livro.
    O resto do app só usa Dados.V / A / G / R, Dados.salvar(), Dados.apagar() e Dados.addRegistro(). */
 "use strict";
@@ -64,8 +64,9 @@ const Dados = {
     const inst = app.initializeApp(FIREBASE_CONFIG, 'portao'); // app com nome próprio: login separado do da Agenda no mesmo navegador
     const a = auth.getAuth(inst); a.languageCode = 'pt';
     let db;
-    try { db = fs.initializeFirestore(inst, { localCache: fs.persistentLocalCache({ tabManager: fs.persistentMultipleTabManager() }) }); }
-    catch (e) { db = fs.getFirestore(inst); }
+    const banco = typeof FIREBASE_DB === 'string' && FIREBASE_DB ? FIREBASE_DB : '(default)';
+    try { db = fs.initializeFirestore(inst, { localCache: fs.persistentLocalCache({ tabManager: fs.persistentMultipleTabManager() }) }, banco); }
+    catch (e) { db = fs.getFirestore(inst, banco); }
     this.fb = { auth, fs, a, db };
     return this.fb;
   },
@@ -240,7 +241,7 @@ const Dados = {
   },
   /**
    * Cria a conta (e-mail e senha) sem derrubar o login do administrador: usa uma
-   * segunda instância do Firebase só para isso. Se a conta já existir (ex.: da Agenda),
+   * segunda instância do Firebase só para isso. Se a conta já existir,
    * apenas libera o acesso — a pessoa continua com a senha que já tem.
    */
   async criarUsuario({ email, senha, nome, papel, geral, maxDispositivos }) {
@@ -273,7 +274,7 @@ function mensagemErro(e) {
     'auth/invalid-email': 'E-mail inválido.',
     'auth/missing-password': 'Digite a senha.',
     'auth/weak-password': 'A senha precisa ter pelo menos 6 caracteres.',
-    'auth/email-already-in-use': 'Já existe uma conta com este e-mail (pode ser a da Agenda do Cadete). Use "Entrar".',
+    'auth/email-already-in-use': 'Já existe uma conta com este e-mail. Use "Entrar".',
     'auth/invalid-credential': 'E-mail ou senha incorretos.',
     'auth/wrong-password': 'E-mail ou senha incorretos.',
     'auth/user-not-found': 'E-mail ou senha incorretos.',

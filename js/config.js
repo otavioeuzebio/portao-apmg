@@ -1,16 +1,17 @@
 /* Configuração da sincronização (Firebase).
-   Usa o mesmo projeto Firebase da Agenda do Cadete ("agenda-esfo"): o login é o mesmo,
-   mas o acesso ao Portão é liberado à parte, pelo administrador, dentro deste app.
-   A chave abaixo é pública por natureza; quem protege os dados são as regras do
-   Firestore (bloco "Portão APMG" em firestore.rules).
+   Projeto Firebase próprio do Portão: "portaoapmg" (ID portaoapgm).
+   A chave abaixo é pública por natureza (identifica o projeto); quem protege os dados
+   são as regras do Firestore (arquivo firestore.rules deste repositório).
    Para usar o app só no modo local (sem nuvem), deixe apiKey vazio. */
 "use strict";
 const FIREBASE_CONFIG = {
-  apiKey: 'AIzaSyCmFBkytK2xGocP53F0BPlb-39kFtvPB_g',
-  authDomain: 'agenda-esfo.firebaseapp.com',
-  projectId: 'agenda-esfo',
-  appId: '1:32285182241:web:fec6f3a2eda4498e111660',
+  apiKey: 'AIzaSyBK97ShbEzRM0IgqJOGVglzDwb9OiZ-KvA',
+  authDomain: 'portaoapgm.firebaseapp.com',
+  projectId: 'portaoapgm',
+  appId: '1:952528610314:web:671a965545d302c13cabf3',
 };
-/** Administradores: liberam contas e definem quem é gestor. Deve bater com firestore.rules. */
+/** Administradores: liberam contas e definem papéis. Deve bater com admin() em firestore.rules. */
 const ADMIN_EMAILS = ['otaviosilva.oe@gmail.com'];
 const FIREBASE_VERSAO = '10.12.2';
+/** Nome do banco Firestore do projeto (foi criado como "default", não "(default)"). */
+const FIREBASE_DB = 'default';
