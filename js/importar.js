@@ -149,9 +149,21 @@ function parseCSV(txt) {
   if (cell || row.length) { row.push(cell); rows.push(row); }
   return rows;
 }
-async function impLerArquivo(file, alvo) {
-  const ext = file.name.split('.').pop().toLowerCase(); let rows = [], imgs = [];
-  if (ext === 'csv' || ext === 'txt') rows = parseCSV((await file.text()).replace(/^﻿/, ''));
+async function impLerArquivo(file, alvo, aviso = () => {}) {
+  const ext = file.name.split('.').pop().toLowerCase(); let rows = [], imgs = [], texto = null, ocr = false;
+  const ehImagem = /^image\//.test(file.type) || ['jpg', 'jpeg', 'png', 'webp', 'bmp', 'gif'].includes(ext);
+  if (ehImagem) {
+    aviso('Lendo o texto da imagem… (na 1ª vez baixa o leitor)');
+    const src = await fileToDataURL(file); const im = await loadImg(src);
+    const s = Math.min(1, 2400 / Math.max(im.width, im.height)); const c = document.createElement('canvas'); c.width = im.width * s; c.height = im.height * s;
+    c.getContext('2d').drawImage(im, 0, 0, c.width, c.height);
+    texto = await ocrTexto(c); ocr = true; rows = linhasEmLinhas(texto);
+  } else if (ext === 'csv' || ext === 'tsv') rows = parseCSV((await file.text()).replace(/^﻿/, ''));
+  else if (ext === 'txt' || ext === 'md') { texto = (await file.text()).replace(/^﻿/, ''); rows = /[;\t]/.test(texto.split('\n')[0] || '') ? parseCSV(texto) : linhasEmLinhas(texto); }
+  else if (ext === 'rtf') { texto = rtfParaTexto(await file.text()); rows = linhasEmLinhas(texto); }
+  else if (ext === 'html' || ext === 'htm') rows = htmlParaLinhas(await file.text());
+  else if (ext === 'odt') rows = await odtParaLinhas(await file.arrayBuffer());
+  else if (ext === 'doc') { texto = docAntigoParaTexto(await file.arrayBuffer()); rows = linhasEmLinhas(texto); }
   else if (['xlsx', 'xls', 'ods'].includes(ext)) {
     await loadScript(LIBS.xlsx); const wb = XLSX.read(await file.arrayBuffer(), { type: 'array' });
     for (const n of wb.SheetNames) { const r = XLSX.utils.sheet_to_json(wb.Sheets[n], { header: 1, raw: false, defval: '' }); if (r.some((x) => x.some((c) => String(c).trim()))) { rows = r; break; } }
@@ -165,10 +177,11 @@ async function impLerArquivo(file, alvo) {
   } else if (ext === 'pdf') {
     await loadScript(LIBS.pdf); pdfjsLib.GlobalWorkerOptions.workerSrc = LIBS.pdfw;
     const pdf = await pdfjsLib.getDocument({ data: await file.arrayBuffer() }).promise; const lines = [];
+    let temTexto = false;
     for (let pn = 1; pn <= pdf.numPages; pn++) {
       const page = await pdf.getPage(pn); const tc = await page.getTextContent(); const byY = [];
       for (const it of tc.items) {
-        const s = it.str; if (!s || !s.trim()) continue; const x = it.transform[4], y = it.transform[5];
+        const s = it.str; if (!s || !s.trim()) continue; temTexto = true; const x = it.transform[4], y = it.transform[5];
         let ln = byY.find((l) => Math.abs(l.y - y) < 3.5); if (!ln) { ln = { y, items: [] }; byY.push(ln); }
         ln.items.push({ t: s, x, end: x + (it.width || s.length * 5) });
       }
@@ -179,6 +192,8 @@ async function impLerArquivo(file, alvo) {
         lines.push(cells);
       }
     }
+    if (!temTexto) { texto = await pdfEscaneado(pdf, aviso); ocr = true; return { rows: linhasEmLinhas(texto), imgs, texto, ocr }; }
+    texto = lines.map((c) => c.map((x) => x.t).join('  ')).join('\n');
     let hi = -1, best = 1;
     lines.slice(0, 40).forEach((c, i) => { const s = c.filter((x) => impGuess(alvo, x.t)).length; if (s > best) { best = s; hi = i; } });
     if (hi >= 0) {
@@ -189,8 +204,10 @@ async function impLerArquivo(file, alvo) {
         rows.push(r);
       }
     } else rows = lines.map((c) => c.map((x) => x.t.trim()));
-  } else throw new Error('Formato não suportado. Use Excel, CSV, Word (.docx) ou PDF.');
-  return { rows: rows.map((r) => r.map((c) => String(c ?? '').trim())), imgs };
+  } else throw new Error('Formato não reconhecido. Use planilha (Excel, ODS, CSV), Word (.docx, .doc, .odt, .rtf), PDF, imagem ou texto.');
+  rows = rows.map((r) => r.map((c) => String(c ?? '').trim()));
+  if (texto == null) texto = rows.map((r) => r.join('  ')).join('\n');
+  return { rows, imgs, texto, ocr };
 }
 
 /* ---------- tela de importação (folha) ---------- */
@@ -202,8 +219,11 @@ function abrirImportar(alvo = 'veiculos') {
       <select id="impAlvo">${Object.entries(IMP_ALVOS).map(([k, v]) => `<option value="${k}" ${k === alvo ? 'selected' : ''}>${v.nome}</option>`).join('')}</select></label>
     <label class="drop" for="impFile">
       <svg viewBox="0 0 24 24" fill="none" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M12 18v-6M9 15l3-3 3 3"/></svg>
-      <b>Escolher arquivo</b><small>Excel (.xlsx, .xls), CSV, ODS, Word (.docx) ou PDF com tabela</small></label>
-    <input type="file" id="impFile" accept=".xlsx,.xls,.ods,.csv,.txt,.docx,.pdf" hidden>
+      <b>Escolher arquivo</b><small>Planilha (Excel, ODS, CSV), Word (.docx, .doc), ODT, RTF, PDF (inclusive escaneado), foto de uma lista ou texto</small></label>
+    <input type="file" id="impFile" accept=".xlsx,.xls,.ods,.csv,.tsv,.txt,.md,.docx,.doc,.odt,.rtf,.html,.htm,.pdf,image/*" hidden>
+    <details class="setrow" id="impColarBox"><summary style="cursor:pointer;font-weight:600">Colar texto (WhatsApp, e-mail, ofício…)</summary>
+      <textarea id="impColar" rows="6" placeholder="Cole aqui uma lista com placas ou prefixos, uma por linha. Ex.:&#10;BRA2E19 — Cad. Fulano — Gol prata&#10;VTR 13-1234 Hilux"></textarea>
+      <button class="btn" id="impColarGo" type="button">Procurar placas e prefixos</button></details>
     <div id="impStage" class="view" hidden></div>
     <div class="note" id="impDica"></div>
     <div class="btnrow"><button class="btn" id="impModelo" type="button">Baixar planilha modelo</button></div>
@@ -214,15 +234,22 @@ function abrirImportar(alvo = 'veiculos') {
     $('#impDica').innerHTML = `Colunas reconhecidas: <b>${esc(C)}</b>.` + (IMP.alvo === 'agendados' ? ' Linhas sem data entram na data que você escolher na conferência.' : '') + (IMP.alvo === 'veiculos' ? ' Fotos dentro de tabelas do Word também são importadas.' : '');
   };
   dica();
-  $('#impAlvo').onchange = (e) => { IMP.alvo = e.target.value; dica(); if (IMP.rows) impPreparar(IMP.rows, IMP.imgs, IMP.nomeArq); };
+  $('#impAlvo').onchange = (e) => { IMP.alvo = e.target.value; dica(); if (IMP.solta) impSoltaRender(); else if (IMP.rows) impPreparar(IMP.rows, IMP.imgs, IMP.nomeArq); };
+  $('#impColarGo').onclick = () => {
+    const t = $('#impColar').value; if (!t.trim()) { toast('Cole o texto primeiro'); return; }
+    Object.assign(IMP, { rows: null, imgs: [], nomeArq: 'texto colado', texto: t }); impSolta(t, false);
+  };
   $('#impFile').onchange = async (e) => {
     const f = e.target.files[0]; e.target.value = ''; if (!f) return;
     const st = $('#impStage'); st.hidden = false; st.innerHTML = `<p class="count"><span class="spin"></span> Lendo ${esc(f.name)}…</p>`;
     try {
-      const { rows, imgs } = await impLerArquivo(f, IMP.alvo);
-      if (!rows.length) throw new Error('Não encontrei linhas no arquivo.');
-      impPreparar(rows, imgs, f.name);
-    } catch (err) { st.innerHTML = `<div class="note"><b>Não foi possível ler o arquivo.</b> ${esc(err.message)} Se for um PDF escaneado (foto do papel), converta para Excel ou Word antes.</div>`; }
+      const aviso = (t) => { st.innerHTML = `<p class="count"><span class="spin"></span> ${esc(t)}</p>`; };
+      const { rows, imgs, texto, ocr } = await impLerArquivo(f, IMP.alvo, aviso);
+      if (!rows.length && !(texto || '').trim()) throw new Error('Não encontrei texto no arquivo.');
+      IMP.texto = texto; IMP.ocr = ocr; IMP.solta = null;
+      if (ocr) { Object.assign(IMP, { rows, imgs, nomeArq: f.name }); impSolta(texto, true); } // foto/escaneado: sempre como lista
+      else impPreparar(rows, imgs, f.name);
+    } catch (err) { st.innerHTML = `<div class="note"><b>Não foi possível ler o arquivo.</b> ${esc(err.message)}</div>`; }
   };
   $('#impModelo').onclick = () => {
     const mod = {
@@ -247,7 +274,7 @@ function abrirImportar(alvo = 'veiculos') {
     toast(upd.length + ' fotos ligadas' + (miss ? ' · ' + miss + ' sem placa cadastrada' : ''), 5000);
   };
 }
-function impPreparar(rows, imgs, nomeArq) {
+function impPreparar(rows, imgs, nomeArq, forcarTabela) {
   const alvo = IMP.alvo;
   let hi = -1, best = 1;
   rows.slice(0, 15).forEach((r, i) => { const s = r.filter((c) => impGuess(alvo, c)).length; if (s > best) { best = s; hi = i; } });
@@ -261,6 +288,8 @@ function impPreparar(rows, imgs, nomeArq) {
   }
   const data = []; rows.forEach((r, i) => { if (i <= hi || !r.some(Boolean)) return; data.push({ r, img: (imgs || [])[i] || null }); });
   Object.assign(IMP, { rows, imgs, nomeArq, head: hi >= 0 ? rows[hi] : null, map, data, ncol });
+  // sem cabeçalho e sem coluna de placa/prefixo: é texto corrido — procura placas e prefixos linha a linha
+  if (!forcarTabela && alvo !== 'agendados' && hi < 0 && !map.includes('placa') && !map.includes('prefixo')) { impSolta(IMP.texto || rows.map((r) => r.join('  ')).join('\n'), IMP.ocr); return; }
   impRender();
 }
 function impObj(row) {
@@ -290,11 +319,12 @@ function impRender() {
     ${IMP.data.length > 8 ? `<p class="count">Mostrando 8 de ${IMP.data.length} linhas. Linhas riscadas serão ignoradas.</p>` : ''}
     ${IMP.alvo === 'agendados' ? `<label class="f" for="impData">Data para linhas sem data<input type="date" id="impData" value="${IMP.dataPadrao}"></label>`
       : `<label class="f" for="impModo">Placas que já existem<select id="impModo"><option value="atualizar" ${IMP.modo === 'atualizar' ? 'selected' : ''}>Atualizar com os dados do arquivo</option><option value="pular" ${IMP.modo === 'pular' ? 'selected' : ''}>Manter como estão (pular)</option></select></label>`}
-    <div class="btnrow"><button class="btn ghost" id="impCancel" type="button">Cancelar</button><button class="btn primary" id="impGo" type="button" ${ok ? '' : 'disabled'}>Importar ${ok} itens</button></div>`;
+    <div class="btnrow"><button class="btn ghost" id="impCancel" type="button">Cancelar</button>${IMP.alvo !== 'agendados' ? '<button class="btn" id="impSoltaBtn" type="button">Ler como lista solta</button>' : ''}<button class="btn primary" id="impGo" type="button" ${ok ? '' : 'disabled'}>Importar ${ok} itens</button></div>`;
   $$('#impStage select[data-col]').forEach((s) => (s.onchange = () => { IMP.map[+s.dataset.col] = s.value; impRender(); }));
   const m = $('#impModo'); if (m) m.onchange = (e) => (IMP.modo = e.target.value);
   const d = $('#impData'); if (d) d.onchange = (e) => (IMP.dataPadrao = e.target.value || hojeISO());
   $('#impCancel').onclick = () => { st.hidden = true; st.innerHTML = ''; IMP.rows = null; };
+  const sb = $('#impSoltaBtn'); if (sb) sb.onclick = () => impSolta(IMP.texto || IMP.rows.map((r) => r.join('  ')).join('\n'), IMP.ocr);
   $('#impGo').onclick = impGravar;
 }
 async function impGravar() {
@@ -314,5 +344,149 @@ async function impGravar() {
     $('#impStage').innerHTML = `<div class="setrow"><h3>Importação concluída</h3><p><b>${novos}</b> novos · <b>${atual}</b> atualizados${pul ? ` · ${pul} mantidos` : ''}${ign ? ` · ${ign} linhas ignoradas` : ''}.</p>
       <button class="btn" id="impVer" type="button">Ver ${esc(A.nome.toLowerCase())}</button></div>`;
     $('#impVer').onclick = () => { closeSheet(); irCadastro(IMP.alvo); };
+  } catch (e) { $('#impStage').innerHTML = `<div class="note"><b>Falhou.</b> ${esc(mensagemErro(e))}</div>`; }
+}
+
+/* ---------- formatos extras: imagem/foto, PDF escaneado, .doc, .odt, .rtf, .html, texto ---------- */
+const LIB_JSZIP = 'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js';
+const linhasEmLinhas = (txt) => String(txt || '').split(/\r?\n/).map((l) => l.trim()).filter(Boolean).map((l) => l.split(/\t|;|\s{2,}|\s[|]\s/).map((s) => s.trim()));
+let ocrDoc = null;
+/** Leitor de texto para documentos (português, página inteira) — separado do leitor de placas da câmera. */
+async function ocrTexto(fonte, progresso) {
+  await loadScript(LIBS.tess);
+  if (!ocrDoc) ocrDoc = await Tesseract.createWorker('por', 1);
+  if (progresso) progresso();
+  const { data } = await ocrDoc.recognize(fonte);
+  return data.text || '';
+}
+function rtfParaTexto(rtf) {
+  return rtf.replace(/\\'([0-9a-f]{2})/gi, (m, h) => String.fromCharCode(parseInt(h, 16)))
+    .replace(/\\(par|line|row)d?\b/g, '\n').replace(/\\cell\b/g, '\t')
+    .replace(/\{\\\*[^{}]*\}/g, '').replace(/\\[a-zA-Z]+-?\d* ?/g, '').replace(/[{}]/g, '').replace(/\n{3,}/g, '\n\n');
+}
+/** Word 97-2003 (.doc): não há leitor no navegador; extrai o texto bruto (basta para achar placas e prefixos). */
+function docAntigoParaTexto(buf) {
+  const b = new Uint8Array(buf);
+  const latin = new TextDecoder('windows-1252').decode(b).replace(/[^\x20-\x7E\xC0-\xFF\n\r\t]+/g, '\n');
+  const utf16 = new TextDecoder('utf-16le').decode(b.subarray(0, b.length - (b.length % 2))).replace(/[^\x20-\x7EÀ-ÿ\n\r\t]+/g, '\n');
+  const conta = (t) => (t.toUpperCase().match(/\b[A-Z]{3}-?\d[A-Z0-9]\d{2}\b/g) || []).length + (t.match(/[a-zà-ú]{4,}/gi) || []).length / 50;
+  const t = conta(utf16) > conta(latin) ? utf16 : latin;
+  return t.split('\n').map((l) => l.trim()).filter((l) => l.length >= 3).join('\n');
+}
+async function odtParaLinhas(buf) {
+  await loadScript(LIB_JSZIP);
+  const zip = await JSZip.loadAsync(buf); const xml = await zip.file('content.xml').async('string');
+  const doc = new DOMParser().parseFromString(xml, 'application/xml'); const NS = 'urn:oasis:names:tc:opendocument:xmlns:table:1.0';
+  const trs = [...doc.getElementsByTagNameNS(NS, 'table-row')];
+  if (trs.length) return trs.map((tr) => [...tr.getElementsByTagNameNS(NS, 'table-cell')].map((c) => c.textContent.trim()));
+  const P = 'urn:oasis:names:tc:opendocument:xmlns:text:1.0';
+  return linhasEmLinhas([...doc.getElementsByTagNameNS(P, 'p')].map((p) => p.textContent).join('\n'));
+}
+function htmlParaLinhas(html) {
+  const doc = new DOMParser().parseFromString(html, 'text/html'); const trs = [...doc.querySelectorAll('tr')];
+  if (trs.length) return trs.map((tr) => [...tr.children].map((td) => td.textContent.replace(/\s+/g, ' ').trim()));
+  return linhasEmLinhas(doc.body ? doc.body.innerText || doc.body.textContent : '');
+}
+/** PDF escaneado: desenha as páginas e passa pelo leitor de texto. */
+async function pdfEscaneado(pdf, aviso) {
+  let txt = ''; const n = Math.min(pdf.numPages, 15);
+  for (let pn = 1; pn <= n; pn++) {
+    aviso(`Lendo página ${pn} de ${n} (PDF escaneado)…`);
+    const page = await pdf.getPage(pn); const vp = page.getViewport({ scale: 2 });
+    const c = document.createElement('canvas'); c.width = vp.width; c.height = vp.height;
+    await page.render({ canvasContext: c.getContext('2d'), viewport: vp }).promise;
+    txt += (await ocrTexto(c)) + '\n';
+  }
+  return txt;
+}
+
+/* ---------- lista solta: acha placas e prefixos em qualquer texto ---------- */
+const RE_PREFIXO = /\b(?:VTR|VIATURA|PREF(?:IXO)?)\.?\s*(?:N[º°O.]?\s*)?[:\-–]?\s*([A-Z]{0,3}[\s-]?\d{1,3}[\s.\-\/]?\d{2,5}|\d{3,6})\b|(?<![\/\d])\b(\d{1,3}-\d{3,5})\b(?![\/\d])/i;
+/** Itens {placa, prefixo, texto} de cada linha. ocr=true aceita correções de letra/número (foto ou escaneado). */
+function extrairItens(texto, ocr) {
+  const out = [], vistos = new Set();
+  for (const bruta of String(texto || '').split(/\r?\n/)) {
+    const linha = bruta.replace(/\s+/g, ' ').trim(); if (linha.length < 3) continue;
+    const up = linha.toUpperCase();
+    // placas (com ou sem hífen/espaço)
+    // procura em todas as posições (sem "engolir" a placa vizinha), com limite de palavra dos dois lados
+    const placas = [], brutos = [];
+    for (const m of up.matchAll(/(?<![A-Z0-9])(?=([A-Z0-9]{3}[\s-]?[A-Z0-9]{2}[\s-]?[A-Z0-9]{2})(?![A-Z0-9]))/g)) {
+      const raw = m[1], w = raw.replace(/[\s-]/g, ''); if (w.length !== 7 || /^VTR/.test(w)) continue;
+      const r = fixWin(w); if (r && (r.c === 0 || (ocr && r.c <= 1)) && !placas.includes(r.p)) { placas.push(r.p); brutos.push(linha.substr(m.index, raw.length)); }
+    }
+    const mp = linha.match(RE_PREFIXO);
+    let prefixo = mp ? (mp[1] || mp[2] || '').toUpperCase().replace(/\s+/g, '') : '';
+    if (prefixo && placas.some((p) => normDoc(prefixo) === p)) prefixo = '';
+    if (!placas.length && !prefixo) continue;
+    let resto = linha;
+    for (const b of brutos) resto = resto.replace(b, ' ');
+    if (mp) resto = resto.replace(mp[0], ' ');
+    resto = resto.replace(/\b(placas?|prefixos?|vtrs?|viaturas?)\b:?/gi, ' ').replace(/^[\s\d.)\-–—:|]+/, '').replace(/[\s;,|–—-]+$/, '').replace(/\s{2,}/g, ' ').trim();
+    const lista = placas.length ? placas : [''];
+    lista.forEach((placa, i) => {
+      const chave = (placa || '') + '|' + (i === 0 ? prefixo : '');
+      if (vistos.has(chave)) return; vistos.add(chave);
+      out.push({ placa, prefixo: i === 0 ? prefixo : '', texto: resto, ok: true });
+    });
+  }
+  return out;
+}
+function impSolta(texto, ocr) {
+  IMP.solta = extrairItens(texto, ocr); IMP.soltaTexto = texto; IMP.soltaOcr = !!ocr;
+  impSoltaRender();
+}
+function impSoltaRender() {
+  const st = $('#impStage'); st.hidden = false; const it = IMP.solta, alvo = IMP.alvo;
+  const usos = { veiculos: [['nome', 'Nome do responsável'], ['modelo', 'Marca e modelo'], ['obs', 'Observação'], ['', 'Ignorar']],
+    viaturas: [['modelo', 'Marca e modelo'], ['obs', 'Observação'], ['', 'Ignorar']], alertas: [['motivo', 'Motivo'], ['obs', 'Observação'], ['', 'Ignorar']],
+    agendados: [['nome', 'Nome'], ['destino', 'Destino / motivo'], ['', 'Ignorar']] }[alvo];
+  if (IMP.soltaUsoAlvo !== alvo) { IMP.soltaUso = usos[0][0]; IMP.soltaUsoAlvo = alvo; } // padrão muda com o destino
+  const validos = (x) => x.ok && (alvo === 'viaturas' ? !!(x.placa || x.prefixo) : !!x.placa);
+  const n = it.filter(validos).length;
+  st.innerHTML = `<h3 class="sec">Lista encontrada — ${esc(IMP.nomeArq || 'texto colado')}</h3>
+    <p class="count">${it.length ? `${it.length} ${it.length === 1 ? 'item encontrado' : 'itens encontrados'}${IMP.soltaOcr ? ' por leitura de imagem — confira cada placa' : ''}. Desmarque o que não for importar.` : 'Nenhuma placa ou prefixo encontrado neste texto.'}${alvo !== 'viaturas' ? ' Itens só com prefixo entram apenas em Viaturas.' : ''}</p>
+    ${it.length ? `<div class="tablewrap"><table><thead><tr><th></th><th>Placa</th><th>Prefixo</th><th>Texto da linha</th></tr></thead><tbody>
+      ${it.map((x, i) => `<tr class="${validos({ ...x, ok: true }) ? '' : 'bad'}"><td><input type="checkbox" data-si="${i}" ${x.ok ? 'checked' : ''} aria-label="Importar linha ${i + 1}"></td>
+        <td><input data-sp="${i}" value="${esc(x.placa)}" maxlength="8" style="min-height:34px;width:96px;text-transform:uppercase;font-weight:600"></td>
+        <td><input data-sx="${i}" value="${esc(x.prefixo)}" style="min-height:34px;width:90px;text-transform:uppercase"></td><td>${esc(x.texto)}</td></tr>`).join('')}</tbody></table></div>
+    <div class="grid2"><label class="f" for="soUso">O texto ao lado é<select id="soUso">${usos.map(([k, l]) => `<option value="${k}" ${k === IMP.soltaUso ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
+      ${alvo === 'veiculos' ? `<label class="f" for="soVinc">Vínculo de todos<select id="soVinc">${VINC.map((v) => `<option ${v === (IMP.soltaVinc || 'Cadete') ? 'selected' : ''}>${v}</option>`).join('')}</select></label>` : ''}
+      ${alvo === 'alertas' ? `<label class="f" for="soMot">Motivo padrão<input id="soMot" value="${esc(IMP.soltaMot || 'Veículo de interesse')}"></label>` : ''}
+      ${alvo === 'agendados' ? `<label class="f" for="impData">Data<input type="date" id="impData" value="${IMP.dataPadrao}"></label>` : ''}</div>
+    ${alvo !== 'agendados' ? `<label class="f" for="impModo">Placas/prefixos que já existem<select id="impModo"><option value="atualizar" ${IMP.modo === 'atualizar' ? 'selected' : ''}>Atualizar</option><option value="pular" ${IMP.modo === 'pular' ? 'selected' : ''}>Manter como estão (pular)</option></select></label>` : ''}` : ''}
+    <div class="btnrow"><button class="btn ghost" id="impCancel" type="button">Cancelar</button>${IMP.rows && IMP.rows.length && IMP.rows[0].length > 1 ? '<button class="btn" id="soTabela" type="button">Ler como tabela</button>' : ''}<button class="btn primary" id="soGo" type="button" ${n ? '' : 'disabled'}>Importar ${n} itens</button></div>`;
+  const sync = () => { const b = $('#soGo'); const k = it.filter(validos).length; b.disabled = !k; b.textContent = `Importar ${k} itens`; };
+  $$('[data-si]', st).forEach((c) => (c.onchange = () => { it[+c.dataset.si].ok = c.checked; sync(); }));
+  $$('[data-sp]', st).forEach((c) => (c.onchange = () => { const p = normPlate(c.value); it[+c.dataset.sp].placa = validPlate(p) ? p : ''; c.value = it[+c.dataset.sp].placa; c.closest('tr').classList.toggle('bad', !validos({ ...it[+c.dataset.sp], ok: true })); sync(); }));
+  $$('[data-sx]', st).forEach((c) => (c.onchange = () => { it[+c.dataset.sx].prefixo = c.value.trim().toUpperCase(); c.closest('tr').classList.toggle('bad', !validos({ ...it[+c.dataset.sx], ok: true })); sync(); }));
+  const u = $('#soUso'); if (u) u.onchange = (e) => (IMP.soltaUso = e.target.value);
+  const v = $('#soVinc'); if (v) v.onchange = (e) => (IMP.soltaVinc = e.target.value);
+  const mo = $('#soMot'); if (mo) mo.onchange = (e) => (IMP.soltaMot = e.target.value);
+  const d = $('#impData'); if (d) d.onchange = (e) => (IMP.dataPadrao = e.target.value || hojeISO());
+  const m = $('#impModo'); if (m) m.onchange = (e) => (IMP.modo = e.target.value);
+  $('#impCancel').onclick = () => { st.hidden = true; st.innerHTML = ''; IMP.rows = null; IMP.solta = null; };
+  const tb = $('#soTabela'); if (tb) tb.onclick = () => { IMP.solta = null; impPreparar(IMP.rows, IMP.imgs, IMP.nomeArq, true); };
+  const go = $('#soGo'); if (go) go.onclick = () => impSoltaGravar(validos);
+}
+async function impSoltaGravar(validos) {
+  const alvo = IMP.alvo, A = IMP_ALVOS[alvo], mapa = Dados.mapa(alvo), uso = IMP.soltaUso;
+  const btn = $('#soGo'); btn.disabled = true; btn.innerHTML = '<span class="spin"></span> Importando…';
+  let novos = 0, atual = 0, pul = 0; const out = [];
+  for (const x of IMP.solta.filter(validos)) {
+    const o = { placa: x.placa, prefixo: x.prefixo };
+    if (uso && x.texto) { if (uso === 'modelo') o.marcaModelo = x.texto; else o[uso] = x.texto; }
+    if (o.marcaModelo && alvo !== 'agendados') { const p = o.marcaModelo.split(/\s*[\/\-–]\s*|\s+/); o.marca = p[0]; o.modelo = p.slice(1).join(' '); if (alvo === 'alertas') o.marcaModelo = x.texto; }
+    if (!A.valido(o)) continue;
+    const k = A.chave(o); const old = k ? mapa.get(k) : null;
+    if (alvo === 'veiculos' && !old) o.vinculo = IMP.soltaVinc || 'Cadete'; // não troca o vínculo de quem já existe
+    if (alvo === 'alertas' && !o.motivo && !(old && old.motivo)) o.motivo = IMP.soltaMot || 'Veículo de interesse';
+    if (old && IMP.modo === 'pular') { pul++; continue; }
+    out.push(A.montar(o, old, IMP)); old ? atual++ : novos++;
+  }
+  try {
+    await Dados.salvarVarios(alvo, out);
+    $('#impStage').innerHTML = `<div class="setrow"><h3>Importação concluída</h3><p><b>${novos}</b> novos · <b>${atual}</b> atualizados${pul ? ` · ${pul} mantidos` : ''}.</p><button class="btn" id="impVer" type="button">Ver ${esc(A.nome.toLowerCase())}</button></div>`;
+    $('#impVer').onclick = () => { closeSheet(); irCadastro(alvo); };
   } catch (e) { $('#impStage').innerHTML = `<div class="note"><b>Falhou.</b> ${esc(mensagemErro(e))}</div>`; }
 }

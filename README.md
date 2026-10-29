@@ -34,8 +34,11 @@ https://otavioeuzebio.github.io/portao-apmg/
 - **Livro** de entradas e saídas, "no local agora", **passagem de serviço** pronta para copiar/enviar e CSV do dia.
 - **Relatórios para o comando**: entradas por dia e por hora (pico), visitantes, pedestres, ocorrências, veículos mais
   frequentes e permanência média, com exportação em **PDF** e **Excel**.
-- **Importação** de Excel, CSV, ODS, Word (.docx, inclusive fotos na tabela) e PDF com tabela, para veículos,
-  lista de alerta e agendados. Fotos em lote pelo nome do arquivo (`BRA2E19.jpg`).
+- **Importação** para veículos, viaturas (placa ou prefixo), lista de alerta e agendados a partir de planilhas
+  (Excel, ODS, CSV), Word (.docx com fotos na tabela, .doc antigo), ODT, RTF, HTML, TXT, PDF (com texto ou escaneado),
+  **foto de uma lista** (leitura de texto no aparelho) ou texto colado (WhatsApp, e-mail, ofício). Tabelas têm conferência
+  de colunas; textos corridos viram uma **lista solta** de placas e prefixos para marcar e importar.
+  Fotos em lote pelo nome do arquivo (`BRA2E19.jpg`).
 - **Dois modos**:
   - **Com a guarda (nuvem)**: todos os celulares do portão veem o mesmo cadastro, agendados, lista de alerta e livro.
     Funciona sem internet e sincroniza depois. Login por e-mail (a conta da Agenda do Cadete serve), com acesso liberado
