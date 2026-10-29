@@ -14,6 +14,11 @@ https://otavioeuzebio.github.io/portao-apmg/
 - **Agendados**: visitas, prestadores e entregas com data e horário; lista "Esperados hoje" e reconhecimento automático
   pela placa ou pelo documento do pedestre.
 - **Pedestres**: entrada e saída por nome e documento, com foto opcional e busca de quem já veio.
+- **Viaturas da APMG**: cadastro por prefixo e/ou placa; saída e retorno exigem **motorista** e **KM inicial/final**
+  (com checagem de KM menor que o anterior e percurso longo). A câmera reconhece a placa da viatura. Lista de viaturas fora,
+  KM rodados na passagem de serviço e nos relatórios.
+- **Cadastro rápido de Uber/app e entregadores** (iFood, Correios etc.), com limite de permanência próprio em minutos.
+  Placa em lista de alerta ou bloqueada abre a consulta normal antes.
 - **Alertas de permanência**: aviso quando visitante ou veículo passa do tempo (configurável) ou do horário agendado.
 - **Livro** de entradas e saídas, "no local agora", **passagem de serviço** pronta para copiar/enviar e CSV do dia.
 - **Relatórios para o comando**: entradas por dia e por hora (pico), visitantes, pedestres, ocorrências, veículos mais
@@ -24,6 +29,9 @@ https://otavioeuzebio.github.io/portao-apmg/
   - **Com a guarda (nuvem)**: todos os celulares do portão veem o mesmo cadastro, agendados, lista de alerta e livro.
     Funciona sem internet e sincroniza depois. Login por e-mail (a conta da Agenda do Cadete serve), com acesso liberado
     pelo administrador. Papéis: **sentinela** (consulta e registra) e **gestor** (também edita).
+    O administrador também **cria usuários com e-mail e senha** dentro do app (entram sem confirmar e-mail) e uma
+    **conta geral da guarda**, que só abre nos celulares autorizados pelo código exibido em cada aparelho (padrão: 2).
+    Na conta geral, o app pede o nome do sentinela a cada serviço (12 h).
   - **Só neste aparelho**: sem conta, dados no IndexedDB, PIN de administrador e backup manual.
 
 ## Configuração da nuvem (uma vez, pelo administrador)

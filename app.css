@@ -3,7 +3,7 @@
 :root{
   --bg:#0d1620; --surface:#142130; --surface2:#1b2b3c; --line:#2a3d52;
   --fg:#e9eff5; --muted:#8fa3b7; --accent:#f2b705; --accent-ink:#1b1500; --accent-text:#f2b705;
-  --ok:#2fbf71; --bad:#ef4b50; --warn:#f5a524; --info:#3d8bfd; --disc:#4b3f8f; --plate-blue:#1d4fa3;
+  --ok:#2fbf71; --bad:#ef4b50; --warn:#f5a524; --info:#3d8bfd; --disc:#4b3f8f; --plate-blue:#1d4fa3; --vtr:#16365e;
   --display:"Barlow Condensed","Arial Narrow",system-ui,sans-serif;
   --body:"Barlow",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
   --radius:12px;
@@ -113,6 +113,8 @@ label.f{display:flex;flex-direction:column;gap:5px;font-size:13px;color:var(--mu
 .plate-num{font:700 2em/1.12 var(--display);letter-spacing:.08em;text-align:center;padding:0 .3em .02em;font-variant-numeric:tabular-nums}
 .plate.xl{font-size:26px}
 .plate.sm{font-size:9px;min-width:0;border-width:1.5px;border-radius:5px}
+.vtr{display:inline-flex;align-items:center;font:700 13px/1 var(--display);letter-spacing:.08em;padding:5px 8px;border-radius:6px;background:var(--vtr);color:#fff;border-left:4px solid var(--accent);white-space:nowrap}
+.vtr.xl{font-size:30px;padding:8px 14px;border-left-width:6px}
 .ped{display:inline-flex;align-items:center;gap:4px;font:700 11px/1 var(--display);letter-spacing:.1em;padding:5px 7px;border-radius:5px;background:color-mix(in srgb,var(--info) 18%,transparent);color:var(--info)}
 
 /* listas */
@@ -246,6 +248,8 @@ pre.passagem{white-space:pre-wrap;background:var(--surface);border:1px solid var
 .acc{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:8px 0;border-bottom:1px solid var(--line)}
 .acc:last-child{border-bottom:0}
 .acc span{flex:1 1 180px;min-width:0;overflow-wrap:anywhere;font-size:14px}
+.acc.col{flex-direction:column;align-items:stretch}
+.acc.col>span{flex:none}
 .acc select{width:auto;min-height:36px;padding:4px 8px;font-size:13px}
 
 /* portão de entrada (login) */

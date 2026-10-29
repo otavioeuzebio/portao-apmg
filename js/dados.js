@@ -4,22 +4,22 @@
    da guarda veem o mesmo cadastro, lista de alerta, agendados e livro.
    O resto do app só usa Dados.V / A / G / R, Dados.salvar(), Dados.apagar() e Dados.addRegistro(). */
 "use strict";
-const NUVEM = { veiculos: 'portaoVeiculos', registros: 'portaoRegistros', alertas: 'portaoAlertas', agendados: 'portaoAgendados' };
-const CHAVE = { veiculos: 'placa', alertas: 'placa', agendados: 'id' };
+const NUVEM = { veiculos: 'portaoVeiculos', registros: 'portaoRegistros', alertas: 'portaoAlertas', agendados: 'portaoAgendados', viaturas: 'portaoViaturas' };
+const CHAVE = { veiculos: 'placa', alertas: 'placa', agendados: 'id', viaturas: 'id' };
 const JANELA_DIAS = 45; // livro carregado em memória (o resto é buscado sob demanda)
 
 const Dados = {
   modo: null, prontoR: false, user: null, papel: '', fb: null, idb: null, online: navigator.onLine, pendente: false,
-  V: new Map(), A: new Map(), G: new Map(), R: [],
+  V: new Map(), A: new Map(), G: new Map(), T: new Map(), R: [], geral: false,
   subs: [], unsub: [],
   on(f) { this.subs.push(f); },
   emit(what) { for (const f of this.subs) { try { f(what); } catch (e) { console.error(e); } } },
-  mapa(col) { return { veiculos: this.V, alertas: this.A, agendados: this.G }[col]; },
+  mapa(col) { return { veiculos: this.V, alertas: this.A, agendados: this.G, viaturas: this.T }[col]; },
 
   /* ---------- IndexedDB ---------- */
   abrirIDB() {
     return new Promise((res, rej) => {
-      const r = indexedDB.open('portao-apmg', 2);
+      const r = indexedDB.open('portao-apmg', 3);
       r.onupgradeneeded = () => {
         const d = r.result, have = new Set(d.objectStoreNames);
         if (!have.has('veiculos')) d.createObjectStore('veiculos', { keyPath: 'placa' });
@@ -27,6 +27,7 @@ const Dados = {
         if (!have.has('config')) d.createObjectStore('config', { keyPath: 'k' });
         if (!have.has('alertas')) d.createObjectStore('alertas', { keyPath: 'placa' });
         if (!have.has('agendados')) d.createObjectStore('agendados', { keyPath: 'id' });
+        if (!have.has('viaturas')) d.createObjectStore('viaturas', { keyPath: 'id' });
       };
       r.onsuccess = () => { this.idb = r.result; res(); };
       r.onerror = () => rej(r.error);
@@ -47,8 +48,8 @@ const Dados = {
   cfgSet(v) { return this.idbReq('config', 'readwrite', (st) => st.put({ k: 'cfg', v })); },
   /** Dados que existem neste aparelho (para enviar à nuvem). */
   async contarLocal() {
-    const [v, a, g] = await Promise.all([this.idbAll('veiculos'), this.idbAll('alertas'), this.idbAll('agendados')]);
-    return { veiculos: v.filter((x) => !x.exemplo), alertas: a, agendados: g };
+    const [v, a, g, t] = await Promise.all([this.idbAll('veiculos'), this.idbAll('alertas'), this.idbAll('agendados'), this.idbAll('viaturas')]);
+    return { veiculos: v.filter((x) => !x.exemplo), alertas: a.filter((x) => !x.exemplo), agendados: g.filter((x) => !x.exemplo), viaturas: t.filter((x) => !x.exemplo) };
   },
 
   /* ---------- Firebase ---------- */
@@ -70,7 +71,8 @@ const Dados = {
   /* ---------- início ---------- */
   async iniciarLocal() {
     this.modo = 'local'; this.papel = 'local';
-    const [v, a, g, r] = await Promise.all([this.idbAll('veiculos'), this.idbAll('alertas'), this.idbAll('agendados'), this.idbAll('registros')]);
+    const [v, a, g, r, t] = await Promise.all([this.idbAll('veiculos'), this.idbAll('alertas'), this.idbAll('agendados'), this.idbAll('registros'), this.idbAll('viaturas')]);
+    this.T = new Map(t.map((x) => [x.id, x]));
     this.V = new Map(v.map((x) => [x.placa, x])); this.A = new Map(a.map((x) => [x.placa, x]));
     this.G = new Map(g.map((x) => [x.id, x])); this.R = r; this.prontoR = true;
     this.emit('tudo');
@@ -79,7 +81,7 @@ const Dados = {
     this.modo = 'nuvem'; this.user = user; this.papel = papel;
     const { fs, db } = await this.carregarFB();
     this.unsub.forEach((u) => u()); this.unsub = [];
-    this.V = new Map(); this.A = new Map(); this.G = new Map(); this.R = []; this.prontoR = false;
+    this.V = new Map(); this.A = new Map(); this.G = new Map(); this.T = new Map(); this.R = []; this.prontoR = false;
     const ouvir = (col, mapa, chave) => {
       this.unsub.push(fs.onSnapshot(fs.collection(db, NUVEM[col]), { includeMetadataChanges: true }, (snap) => {
         snap.docChanges().forEach((ch) => {
@@ -90,7 +92,7 @@ const Dados = {
         this.emit(col);
       }, (err) => this.erroNuvem(err)));
     };
-    ouvir('veiculos', this.V, 'placa'); ouvir('alertas', this.A, 'placa'); ouvir('agendados', this.G, 'id');
+    ouvir('veiculos', this.V, 'placa'); ouvir('alertas', this.A, 'placa'); ouvir('agendados', this.G, 'id'); ouvir('viaturas', this.T, 'id');
     const desde = Date.now() - JANELA_DIAS * 864e5;
     const reg = new Map();
     this.unsub.push(fs.onSnapshot(fs.query(fs.collection(db, NUVEM.registros), fs.where('ts', '>=', desde)), { includeMetadataChanges: true }, (snap) => {
@@ -143,6 +145,13 @@ const Dados = {
     }
     this.emit(col);
   },
+  /** Muda só alguns campos (a sentinela atualiza km e situação da viatura sem poder editar o resto). */
+  async atualizar(col, id, campos) {
+    const atual = this.mapa(col).get(id); if (!atual) return;
+    const novo = { ...atual, ...campos }; this.mapa(col).set(id, novo); this.emit(col);
+    if (this.modo === 'nuvem') { const { fs, db } = this.fb; fs.setDoc(fs.doc(db, NUVEM[col], id), campos, { merge: true }).catch((e) => this.falhaGravar(e)); }
+    else await this.idbPutMany(col, [novo]);
+  },
   async apagar(col, id) { return this.apagarVarios(col, [id]); },
   async apagarVarios(col, ids) {
     if (!ids.length) return;
@@ -188,10 +197,13 @@ const Dados = {
       const { fs, db } = await this.carregarFB();
       const snap = await fs.getDoc(fs.doc(db, 'portaoAcessos', email));
       let r;
-      if (snap.exists()) r = { s: snap.data().ativo === false ? 'bloqueado' : 'liberado', papel: snap.data().papel || 'sentinela' };
+      if (snap.exists()) {
+        const d = snap.data();
+        r = { s: d.ativo === false ? 'bloqueado' : 'liberado', papel: d.papel || 'sentinela', geral: !!d.geral, dispositivos: d.dispositivos || [], criadoPeloAdmin: !!d.criadoPeloAdmin, nome: d.nome || '' };
+      }
       else {
         r = { s: 'pendente', papel: '' };
-        await fs.setDoc(fs.doc(db, 'portaoPedidos', email), { email, criadoEm: fs.serverTimestamp() }).catch(() => {});
+        if (user.emailVerified) await fs.setDoc(fs.doc(db, 'portaoPedidos', email), { email, criadoEm: fs.serverTimestamp() }).catch(() => {});
       }
       try { localStorage.setItem(chave, JSON.stringify(r)); } catch (e) { /* sem armazenamento */ }
       return r;
@@ -206,13 +218,36 @@ const Dados = {
     const acc = new Map(a.docs.map((d) => [d.id, d.data()]));
     return {
       pendentes: p.docs.map((d) => d.id).filter((e) => !acc.has(e)).sort(),
-      contas: [...acc].map(([email, v]) => ({ email, ativo: v.ativo !== false, papel: v.papel || 'sentinela' })).sort((x, y) => x.email.localeCompare(y.email)),
+      contas: [...acc].map(([email, v]) => ({ email, ativo: v.ativo !== false, papel: v.papel || 'sentinela', nome: v.nome || '', geral: !!v.geral, dispositivos: v.dispositivos || [], maxDispositivos: v.maxDispositivos || 2, criadoPeloAdmin: !!v.criadoPeloAdmin }))
+        .sort((x, y) => (y.geral - x.geral) || x.email.localeCompare(y.email)),
     };
   },
   async definirAcesso(email, dados) {
     const { fs, db } = this.fb; email = email.toLowerCase();
     await fs.setDoc(fs.doc(db, 'portaoAcessos', email), { ...dados, atualizadoEm: fs.serverTimestamp() }, { merge: true });
     await fs.deleteDoc(fs.doc(db, 'portaoPedidos', email)).catch(() => {});
+  },
+  /**
+   * Cria a conta (e-mail e senha) sem derrubar o login do administrador: usa uma
+   * segunda instância do Firebase só para isso. Se a conta já existir (ex.: da Agenda),
+   * apenas libera o acesso — a pessoa continua com a senha que já tem.
+   */
+  async criarUsuario({ email, senha, nome, papel, geral, maxDispositivos }) {
+    const { auth, fs, db } = this.fb; email = email.trim().toLowerCase();
+    const B = `https://www.gstatic.com/firebasejs/${FIREBASE_VERSAO}`;
+    const appMod = await import(B + '/firebase-app.js');
+    const inst = appMod.initializeApp(FIREBASE_CONFIG, 'criador-' + Date.now());
+    const a2 = auth.initializeAuth(inst, { persistence: auth.inMemoryPersistence });
+    let jaExistia = false;
+    try { await auth.createUserWithEmailAndPassword(a2, email, senha); await auth.signOut(a2); }
+    catch (e) { if (e && e.code === 'auth/email-already-in-use') jaExistia = true; else throw e; }
+    finally { appMod.deleteApp(inst).catch(() => {}); }
+    await fs.setDoc(fs.doc(db, 'portaoAcessos', email), {
+      ativo: true, papel: papel || 'sentinela', nome: nome || '', geral: !!geral, criadoPeloAdmin: true,
+      ...(geral ? { maxDispositivos: maxDispositivos || 2, dispositivos: [] } : {}), atualizadoEm: fs.serverTimestamp(),
+    }, { merge: true });
+    await fs.deleteDoc(fs.doc(db, 'portaoPedidos', email)).catch(() => {});
+    return { jaExistia };
   },
   async removerAcesso(email) {
     const { fs, db } = this.fb;

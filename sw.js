@@ -1,8 +1,8 @@
 /* Portão APMG — funciona offline depois do primeiro acesso.
    Ao publicar mudanças, altere CACHE para os celulares baixarem a versão nova. */
-const CACHE = 'portao-apmg-v2.0.0';
+const CACHE = 'portao-apmg-v2.1.0';
 const CORE = ['./', './index.html', './app.css', './manifest.json', './icon-192.png', './icon-512.png',
-  './js/config.js', './js/util.js', './js/placas.js', './js/dados.js', './js/ocr.js', './js/importar.js', './js/relatorios.js', './js/app.js'];
+  './js/config.js', './js/util.js', './js/placas.js', './js/dados.js', './js/ocr.js', './js/importar.js', './js/viaturas.js', './js/relatorios.js', './js/app.js'];
 // bibliotecas carregadas sob demanda (leitor de placas, planilhas, PDF, Firebase, fontes)
 const CDNS = ['https://cdnjs.cloudflare.com', 'https://cdn.jsdelivr.net', 'https://www.gstatic.com', 'https://fonts.googleapis.com', 'https://fonts.gstatic.com'];
 

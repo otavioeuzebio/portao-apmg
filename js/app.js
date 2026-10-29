@@ -1,6 +1,6 @@
 /* Portão APMG — telas e regras do posto. */
 "use strict";
-let CFG = { modo: null, sentinela: '', pin: '', theme: '', som: true, auto: false, seeded: false, limVisit: 4, limGeral: 12 };
+let CFG = { modo: null, sentinela: '', pin: '', theme: '', som: true, auto: false, seeded: false, seededVtr: false, limVisit: 4, limGeral: 12, limRapido: 30, deviceId: '' };
 let unlocked = false, cur = 'portao', modoPortao = 'veiculo', cadSub = 'veiculos', cadFilter = 'todos', livroFiltro = 'todos', pesFoto = null;
 async function saveCfg() { try { await Dados.cfgSet(CFG); } catch (e) { /* sem armazenamento */ } }
 
@@ -41,28 +41,37 @@ function agJanela(g, now = Date.now()) {
 const agendadosHoje = () => [...Dados.G.values()].filter((g) => agJanela(g) !== null).sort((a, b) => (horaMin(a.horaIni) ?? 0) - (horaMin(b.horaIni) ?? 0));
 function agendadoVeiculo(p) { const alt = altPlate(p); return agendadosHoje().find((g) => g.placa && (g.placa === p || g.placa === alt)) || null; }
 function agendadoPessoa(doc, nome) { const d = normDoc(doc), n = norm(nome); return agendadosHoje().find((g) => (d && normDoc(g.documento) === d) || (n && norm(g.nome) === n)) || null; }
-window.placaConhecida = (p) => !!(findVehicle(p) || alertaDe(p) || agendadoVeiculo(p));
+window.placaConhecida = (p) => !!(findVehicle(p) || alertaDe(p) || agendadoVeiculo(p) || viaturaPorPlaca(p));
 function avaliar(p) {
   const v = findVehicle(p), al = alertaDe(p), ag = v ? null : agendadoVeiculo(p), key = v ? v.placa : p;
   let st = 'nao';
   if (v) st = statusOf(v); else if (ag) st = agJanela(ag) === 'agora' ? 'agend' : 'agendfora';
   return { v, al, ag, st, key };
 }
-const ST = { ok: ['ok', 'Autorizado'], bloq: ['bad', 'Bloqueado'], venc: ['warn', 'Vencido'], nao: ['warn', 'Não cadastrado'], agend: ['info', 'Agendado'], agendfora: ['warn', 'Fora do horário'], pessoa: ['info', 'Pedestre'] };
-const visitante = (r) => r.kind === 'pessoa' || ['nao', 'agend', 'agendfora'].includes(r.resultado);
+const ST = { ok: ['ok', 'Autorizado'], bloq: ['bad', 'Bloqueado'], venc: ['warn', 'Vencido'], nao: ['warn', 'Não cadastrado'], agend: ['info', 'Agendado'], agendfora: ['warn', 'Fora do horário'], pessoa: ['info', 'Pedestre'],
+  app: ['info', 'Uber / app'], entrega: ['info', 'Entrega'], vtr: ['ok', 'Viatura'] };
+const visitante = (r) => r.kind === 'pessoa' || ['nao', 'agend', 'agendfora', 'app', 'entrega'].includes(r.resultado);
+const rapido = (r) => ['app', 'entrega'].includes(r.resultado);
 function similar(p) { const out = []; for (const k of Dados.V.keys()) if (plateDist(k, p) === 1) out.push(Dados.V.get(k)); return out.slice(0, 3); }
 
 /* ---------- livro ---------- */
 function insideList() {
   const last = new Map();
-  for (const r of Dados.R) { const k = r.chave || r.placa; const p = last.get(k); if (!p || r.ts > p.ts) last.set(k, r); }
+  for (const r of Dados.R) { if (r.kind === 'viatura') continue; const k = r.chave || r.placa; const p = last.get(k); if (!p || r.ts > p.ts) last.set(k, r); }
   return [...last.values()].filter((r) => r.tipo === 'entrada').sort((a, b) => b.ts - a.ts);
 }
 const isInside = (k) => insideList().some((r) => (r.chave || r.placa) === k);
+async function garantirSentinela() {
+  if (!Dados.geral || CFG.sentinela) return true;
+  const n = await ask({ title: 'Quem está de serviço?', msg: 'Este celular usa a conta geral da guarda. Informe o sentinela para constar nos registros.', ok: 'Salvar', input: { ph: 'Ex.: Cad. Euzebio — 1051' } });
+  if (!n || !n.trim()) { toast('Informe o sentinela para registrar.'); return false; }
+  CFG.sentinela = n.trim(); CFG.sentinelaEm = Date.now(); await saveCfg(); renderHeader(); return true;
+}
 async function registrar(rec) {
+  if (!await garantirSentinela()) throw new Error('sem sentinela');
   rec = { ...rec, ts: Date.now(), sentinela: CFG.sentinela || '' };
   await Dados.addRegistro(rec);
-  toast((rec.tipo === 'entrada' ? 'Entrada' : 'Saída') + ' de ' + (rec.placa || rec.nome) + ' registrada às ' + fmtH(rec.ts));
+  toast((rec.kind === 'viatura' ? (rec.tipo === 'entrada' ? 'Retorno' : 'Saída') : rec.tipo === 'entrada' ? 'Entrada' : 'Saída') + ' de ' + (rec.prefixo ? 'VTR ' + rec.prefixo : rec.placa || rec.nome) + ' registrada às ' + fmtH(rec.ts));
 }
 async function regVeiculo(placa, tipo, extra = {}) {
   const av = avaliar(placa), v = av.v, ag = av.ag;
@@ -79,6 +88,7 @@ function atrasados(now = Date.now()) {
     let lim = null, mot = '';
     const ag = r.agendadoId && Dados.G.get(r.agendadoId);
     if (ag && ag.horaFim) { lim = diaMs(ag.dataFim || ag.data) + (horaMin(ag.horaFim) + 30) * 6e4; mot = 'agendado até ' + ag.horaFim; }
+    else if (rapido(r) && +CFG.limRapido > 0) { lim = r.ts + CFG.limRapido * 6e4; mot = 'limite de Uber/entrega (' + CFG.limRapido + ' min)'; }
     else if (visitante(r) && +CFG.limVisit > 0) { lim = r.ts + CFG.limVisit * 36e5; mot = 'limite de visitante (' + CFG.limVisit + ' h)'; }
     else if (+CFG.limGeral > 0) { lim = r.ts + CFG.limGeral * 36e5; mot = 'limite geral (' + CFG.limGeral + ' h)'; }
     return lim && now > lim ? { r, exc: now - lim, mot } : null;
@@ -100,7 +110,7 @@ function checarPermanencia() {
 }
 
 /* ---------- RESULTADO DA CONSULTA DE PLACA ---------- */
-window.onPlacaLida = (p, recorte, origem) => showResult(p, origem, recorte);
+window.onPlacaLida = (p, recorte, origem) => { const vt = viaturaPorPlaca(p); if (vt && !alertaDe(p)) abrirViatura(vt.id, recorte); else showResult(p, origem, recorte); };
 function showResult(raw, origem = 'manual', recorte = null) {
   const p = normPlate(raw); if (!validPlate(p)) { toast('Placa inválida. Use o formato ABC1D23 ou ABC1234.'); return; }
   const { v, al, ag, st, key } = avaliar(p), dentro = isInside(key);
@@ -150,7 +160,7 @@ function showResult(raw, origem = 'manual', recorte = null) {
   const corMain = al ? 'primary' : st === 'bloq' ? 'bad' : first === 'entrada' && (st === 'ok' || st === 'agend') ? 'ok' : 'primary';
   html += `<div class="btnrow"><button class="btn big ${corMain}" id="resMain" type="button">Registrar ${first === 'entrada' ? 'entrada' : 'saída'}</button>
     <button class="btn" id="resOther" type="button">Registrar ${first === 'entrada' ? 'saída' : 'entrada'}</button></div>
-    <div class="btnrow">${v ? `<button class="btn" id="resEdit" type="button">Editar cadastro</button>` : `${ag ? '' : `<button class="btn primary" id="resVis" type="button">Visitante rápido</button>`}<button class="btn" id="resCad" type="button">Cadastrar veículo</button>`}<button class="btn ghost" id="resHist" type="button">Histórico desta placa</button></div>`;
+    <div class="btnrow">${v ? `<button class="btn" id="resEdit" type="button">Editar cadastro</button>` : `${ag ? '' : `<button class="btn primary" id="resVis" type="button">Visitante rápido</button><button class="btn" id="resApp" type="button">Uber / app</button><button class="btn" id="resEnt" type="button">Entrega</button>`}<button class="btn" id="resCad" type="button">Cadastrar veículo</button>`}<button class="btn ghost" id="resHist" type="button">Histórico desta placa</button></div>`;
   openSheet('Consulta de placa', html);
   alertFx(cls === 'disc' ? 'disc' : cls === 'info' ? 'ok' : cls, CFG.som);
   const obs = () => $('#resObs').value.trim();
@@ -161,6 +171,8 @@ function showResult(raw, origem = 'manual', recorte = null) {
   else {
     $('#resCad').onclick = async () => { if (await needGestor()) editVehicle(null, { placa: key }); };
     const rv = $('#resVis'); if (rv) rv.onclick = () => { $('#visForm').hidden = false; $('#visNome').focus(); };
+    const ra = $('#resApp'); if (ra) ra.onclick = () => { closeSheet(); abrirRapido('app', { placa: key }); };
+    const re = $('#resEnt'); if (re) re.onclick = () => { closeSheet(); abrirRapido('entrega', { placa: key }); };
     const vs = $('#visSave');
     if (vs) vs.onclick = async () => {
       const nome = $('#visNome').value.trim(); if (!nome) { toast('Informe o nome do condutor'); return; }
@@ -179,7 +191,7 @@ function showResult(raw, origem = 'manual', recorte = null) {
 }
 async function showHistory(chave) {
   const rows = (await Dados.registrosPeriodo(0, Date.now() + 864e5)).filter((r) => (r.chave || r.placa) === chave).sort((a, b) => b.ts - a.ts).slice(0, 80);
-  openSheet('Histórico — ' + (chave.startsWith('P:') ? (rows[0] && rows[0].nome) || 'pedestre' : chave), rows.length ? `<ul class="loglist">${rows.map((r) => logItem(r, true)).join('')}</ul>` : '<p class="empty">Nenhum registro.</p>');
+  openSheet('Histórico — ' + (chave.startsWith('P:') ? (rows[0] && rows[0].nome) || 'pedestre' : chave.startsWith('VTR:') ? (rows[0] && rows[0].prefixo ? 'VTR ' + rows[0].prefixo : chave.slice(4)) : chave), rows.length ? `<ul class="loglist">${rows.map((r) => logItem(r, true)).join('')}</ul>` : '<p class="empty">Nenhum registro.</p>');
 }
 
 /* ---------- PEDESTRES ---------- */
@@ -209,8 +221,9 @@ async function pessoaEntrada(e) {
   if (ag && jan !== 'agora') alertFx('warn', CFG.som);
   $('#pesForm').reset(); pesFoto = null; $('#pesFotoImg').hidden = true; $('#pesHint').hidden = true;
 }
+const pedTag = (r) => `<span class="ped">${r.resultado === 'entrega' ? 'ENTREGA' + (r.empresa ? ' · ' + esc(r.empresa).toUpperCase() : '') : 'PEDESTRE'}</span>`;
 function pessoaItem(r) {
-  return `<li class="litem" data-reg="${esc(r.id)}"><span class="t">${fmtH(r.ts)}</span><div class="who"><div class="vtop"><span class="ped">PEDESTRE</span></div><b>${esc(r.nome)}</b><small>${esc([r.documento, r.destino].filter(Boolean).join(' · '))}</small></div><button class="btn sm" type="button" data-out="${esc(r.chave)}">Saída</button></li>`;
+  return `<li class="litem" data-reg="${esc(r.id)}"><span class="t">${fmtH(r.ts)}</span><div class="who"><div class="vtop">${pedTag(r)}</div><b>${esc(r.nome)}</b><small>${esc([r.documento, r.destino].filter(Boolean).join(' · '))}</small></div><button class="btn sm" type="button" data-out="${esc(r.chave)}">Saída</button></li>`;
 }
 async function saidaDe(chave) {
   const r = insideList().find((x) => (x.chave || x.placa) === chave); if (!r) return;
@@ -220,7 +233,9 @@ async function saidaDe(chave) {
 /* ---------- tela PORTÃO ---------- */
 function renderPortao() {
   $$('#portaoSeg button').forEach((b) => b.setAttribute('aria-pressed', b.dataset.m === modoPortao));
-  $('#modoVeiculo').hidden = modoPortao !== 'veiculo'; $('#modoPessoa').hidden = modoPortao !== 'pessoa';
+  $('#modoVeiculo').hidden = modoPortao !== 'veiculo'; $('#modoPessoa').hidden = modoPortao !== 'pessoa'; $('#modoViatura').hidden = modoPortao !== 'viatura';
+  $('#rapidoRow').hidden = modoPortao === 'viatura';
+  if (modoPortao === 'viatura') renderViaturasPortao();
   const ins = insideList().filter((r) => r.kind === 'pessoa');
   $('#pesInside').innerHTML = ins.length ? ins.map(pessoaItem).join('') : '<li class="empty">Nenhum pedestre dentro da unidade.</li>';
   const esp = agendadosHoje(); $('#espTit').hidden = !esp.length; $('#esperados').hidden = !esp.length;
@@ -234,7 +249,15 @@ function renderPortao() {
   const r = [...Dados.R].sort((a, b) => b.ts - a.ts).slice(0, 5);
   $('#recent').innerHTML = r.length ? r.map((x) => logItem(x, true)).join('') : '<li class="empty">Nenhum registro ainda. Consulte uma placa para começar.</li>';
 }
-$('#portaoSeg').onclick = (e) => { const b = e.target.closest('button'); if (!b) return; modoPortao = b.dataset.m; if (modoPortao === 'pessoa' && Cam.stream) Cam.stop(); renderPortao(); };
+$('#portaoSeg').onclick = (e) => { const b = e.target.closest('button'); if (!b) return; modoPortao = b.dataset.m; if (modoPortao !== 'veiculo' && Cam.stream) Cam.stop(); renderPortao(); };
+$('#btnApp').onclick = () => abrirRapido('app');
+$('#btnEnt').onclick = () => abrirRapido('entrega');
+$('#vtrBusca').onsubmit = (e) => {
+  e.preventDefault(); const q = $('#vtrIn').value.trim(); if (!q) return;
+  const t = viaturaPorTexto(q);
+  if (t) { $('#vtrIn').value = ''; $('#vtrIn').blur(); abrirViatura(t.id); }
+  else toast(podeGerir() ? 'Viatura não cadastrada. Cadastre em Cadastro → Viaturas.' : 'Viatura não cadastrada. Peça a um gestor para cadastrar.', 4000);
+};
 $('#btnCam').onclick = () => Cam.start();
 $('#btnStop').onclick = () => Cam.stop();
 $('#btnTorch').onclick = () => Cam.setTorch();
@@ -248,6 +271,7 @@ $('#pesDoc').onchange = pesHint; $('#pesNome').onchange = pesHint;
 $('#pesFoto').onchange = async (e) => { const f = e.target.files[0]; e.target.value = ''; if (!f) return; pesFoto = await resizeImg(await fileToDataURL(f), 280, .75); const i = $('#pesFotoImg'); i.src = pesFoto || ''; i.hidden = !pesFoto; };
 $('#v-portao').addEventListener('click', async (e) => {
   const out = e.target.closest('[data-out]'); if (out) { e.stopPropagation(); await saidaDe(out.dataset.out); return; }
+  const vt = e.target.closest('[data-vtr]'); if (vt) { abrirViatura(vt.dataset.vtr); return; }
   const ag = e.target.closest('[data-ag]');
   if (ag) {
     const g = Dados.G.get(ag.dataset.ag); if (!g) return;
@@ -258,18 +282,23 @@ $('#v-portao').addEventListener('click', async (e) => {
   const li = e.target.closest('.litem[data-k]'); if (li) abrirRegistro(li.dataset.k);
 });
 $('#permBanner').onclick = () => go('livro');
+$('#hdrSent').onclick = async () => {
+  const n = await ask({ title: 'Sentinela de serviço', msg: 'Nome que aparece nos registros deste celular.', ok: 'Salvar', input: { ph: 'Ex.: Cad. Euzebio — 1051' } });
+  if (n === null) return; CFG.sentinela = n.trim(); CFG.sentinelaEm = Date.now(); await saveCfg(); renderHeader(); toast(CFG.sentinela ? 'Sentinela: ' + CFG.sentinela : 'Sentinela apagado');
+};
 
 /* ---------- CADASTRO ---------- */
 function irCadastro(sub) { cadSub = sub; cadFilter = 'todos'; go('cadastro'); }
 const CAD_FILTROS = {
   veiculos: [['todos', 'Todos'], ['ok', 'Ativos'], ['bloq', 'Bloqueados'], ['venc', 'Vencidos'], ['visit', 'Visitantes'], ['semfoto', 'Sem foto']],
+  viaturas: [['todos', 'Todas'], ['fora', 'Fora'], ['dentro', 'Na unidade'], ['baixadas', 'Baixadas']],
   agendados: [['todos', 'Próximos'], ['hoje', 'Hoje'], ['antigos', 'Encerrados']],
   alertas: [['todos', 'Ativos'], ['inativos', 'Vencidos / inativos']],
 };
 function renderCadastro() {
   $$('#cadSeg button').forEach((b) => b.setAttribute('aria-pressed', b.dataset.c === cadSub));
   $('#cadFilter').innerHTML = CAD_FILTROS[cadSub].map(([k, l]) => `<button class="chip" type="button" data-f="${k}" aria-pressed="${k === cadFilter}">${l}</button>`).join('');
-  $('#cadSearch').placeholder = { veiculos: 'Buscar placa, nome ou modelo', agendados: 'Buscar nome, placa ou destino', alertas: 'Buscar placa ou motivo' }[cadSub];
+  $('#cadSearch').placeholder = { veiculos: 'Buscar placa, nome ou modelo', viaturas: 'Buscar prefixo, placa ou modelo', agendados: 'Buscar nome, placa ou destino', alertas: 'Buscar placa ou motivo' }[cadSub];
   $('#btnNovo').hidden = !podeGerir() && cadSub !== 'veiculos';
   $('#btnImportar').hidden = !podeGerir();
   const q = norm($('#cadSearch').value), qp = normPlate($('#cadSearch').value), hoje = hojeISO();
@@ -284,8 +313,19 @@ function renderCadastro() {
       return !q || norm([v.placa, v.nome, v.postoGrad, v.marca, v.modelo, v.cor, v.setor, v.vinculo].join(' ')).includes(q) || (qp && v.placa.includes(qp));
     }).sort((a, b) => (a.nome || '').localeCompare(b.nome || '', 'pt-BR'));
     n = arr.length;
-    if ([...Dados.V.values()].some((v) => v.exemplo)) { note.hidden = false; note.innerHTML = 'Há <b>cadastros de exemplo</b> para você testar. <button class="btn sm" id="btnDelEx" type="button">Apagar exemplos</button>'; }
+    if ([Dados.V, Dados.T, Dados.G, Dados.A].some((m) => [...m.values()].some((v) => v.exemplo))) { note.hidden = false; note.innerHTML = 'Há <b>cadastros de exemplo</b> para você testar. <button class="btn sm" id="btnDelEx" type="button">Apagar exemplos</button>'; }
     html = arr.map((v) => { const [c, l] = ST[statusOf(v)]; return `<li class="vitem" data-p="${esc(v.placa)}" tabindex="0"><img src="${avatar(v)}" alt="" loading="lazy"><div class="vinfo"><div class="vtop">${plateHTML(v.placa, 'sm')}<span class="pill ${c}">${l}</span>${alertaDe(v.placa) ? '<span class="pill disc">Alerta</span>' : ''}${v.exemplo ? '<span class="pill mut">Exemplo</span>' : ''}</div><b>${esc((v.postoGrad ? v.postoGrad + ' ' : '') + (v.nome || 'Sem nome'))}</b><small>${esc([v.vinculo, [v.marca, v.modelo].filter(Boolean).join(' '), v.cor].filter(Boolean).join(' · '))}</small></div></li>`; }).join('');
+  } else if (cadSub === 'viaturas') {
+    let arr = [...Dados.T.values()]; total = arr.length;
+    arr = arr.filter((t) => {
+      if (cadFilter === 'todos' && t.ativo === false) return false; if (cadFilter === 'fora' && !t.fora) return false;
+      if (cadFilter === 'dentro' && (t.fora || t.ativo === false)) return false; if (cadFilter === 'baixadas' && t.ativo !== false) return false;
+      return !q || norm([t.prefixo, t.placa, t.marca, t.modelo, t.tipo, t.motoristaAtual].join(' ')).includes(q) || (qp && normDoc(t.prefixo + t.placa).includes(qp));
+    }).sort((a, b) => vtrNome(a).localeCompare(vtrNome(b), 'pt-BR', { numeric: true }));
+    n = arr.length;
+    if (!total) { note.hidden = false; note.innerHTML = 'Cadastre as viaturas da APMG pelo <b>prefixo</b>, pela <b>placa</b> ou pelos dois. Na saída e no retorno, o app exige motorista e KM.'; }
+    html = arr.map((t) => `<li class="vitem" data-t="${esc(t.id)}" tabindex="0"><div class="vinfo"><div class="vtop">${vtrBadge(t)}${t.placa ? plateHTML(t.placa, 'sm') : ''}${t.ativo === false ? '<span class="pill mut">Baixada</span>' : t.fora ? '<span class="pill info">Fora</span>' : '<span class="pill ok">Na unidade</span>'}${t.exemplo ? '<span class="pill mut">Exemplo</span>' : ''}</div>
+      <b>${esc([t.tipo, t.marca, t.modelo].filter(Boolean).join(' ') || 'Viatura')}</b><small>${esc(['KM ' + fmtKm(t.kmAtual), t.fora ? 'com ' + (t.motoristaAtual || '—') : '', t.cor].filter(Boolean).join(' · '))}</small></div></li>`).join('');
   } else if (cadSub === 'agendados') {
     let arr = [...Dados.G.values()]; total = arr.length;
     arr = arr.filter((g) => {
@@ -314,7 +354,7 @@ function renderCadastro() {
   }
   $('#cadCount').textContent = `${n} de ${total}`;
   $('#cadList').innerHTML = html || '<li class="empty">Nada encontrado.</li>';
-  const de = $('#btnDelEx'); if (de) de.onclick = async () => { if (!await needGestor()) return; await Dados.apagarVarios('veiculos', [...Dados.V.values()].filter((v) => v.exemplo).map((v) => v.placa)); toast('Exemplos apagados'); };
+  const de = $('#btnDelEx'); if (de) de.onclick = async () => { if (!await needGestor()) return; for (const [col, k] of [['veiculos', 'placa'], ['viaturas', 'id'], ['agendados', 'id'], ['alertas', 'placa']]) await Dados.apagarVarios(col, [...Dados.mapa(col).values()].filter((v) => v.exemplo).map((v) => v[k])); toast('Exemplos apagados'); };
 }
 $('#cadSeg').onclick = (e) => { const b = e.target.closest('button'); if (!b) return; cadSub = b.dataset.c; cadFilter = 'todos'; $('#cadSearch').value = ''; renderCadastro(); };
 $('#cadSearch').oninput = renderCadastro;
@@ -322,13 +362,14 @@ $('#cadFilter').onclick = (e) => { const b = e.target.closest('.chip'); if (!b) 
 $('#cadList').onclick = async (e) => {
   const li = e.target.closest('.vitem'); if (!li) return;
   if (li.dataset.p) { if (podeGerir() && await needGestor()) editVehicle(li.dataset.p); else showResult(li.dataset.p, 'cadastro'); }
+  else if (li.dataset.t) { if (podeGerir() && await needGestor()) editViatura(li.dataset.t); else abrirViatura(li.dataset.t); }
   else if (li.dataset.g) { if (podeGerir() && await needGestor()) editAgendado(li.dataset.g); else verAgendado(li.dataset.g); }
   else if (li.dataset.a) { if (podeGerir() && await needGestor()) editAlerta(li.dataset.a); else showResult(li.dataset.a, 'cadastro'); }
 };
 $('#cadList').onkeydown = (e) => { if (e.key === 'Enter') e.target.click(); };
 $('#btnNovo').onclick = async () => {
   if (cadSub === 'veiculos') { if (await needGestor()) editVehicle(null); }
-  else if (await needGestor()) cadSub === 'agendados' ? editAgendado(null) : editAlerta(null);
+  else if (await needGestor()) ({ viaturas: () => editViatura(null), agendados: () => editAgendado(null), alertas: () => editAlerta(null) })[cadSub]();
 };
 $('#btnImportar').onclick = async () => { if (await needGestor()) abrirImportar(cadSub); };
 
@@ -426,13 +467,16 @@ function editAlerta(placa) {
 /* ---------- LIVRO ---------- */
 function logItem(r, showDate) {
   const [c, l] = ST[r.resultado] || ST.ok;
-  const ident = r.kind === 'pessoa' ? '<span class="ped">PEDESTRE</span>' : plateHTML(r.placa, 'sm');
-  const pill = r.alerta ? '<span class="pill disc">Alerta</span>' : r.resultado !== 'ok' && r.resultado !== 'pessoa' ? `<span class="pill ${c}">${l}</span>` : '<span></span>';
+  const ident = r.kind === 'viatura' ? `<span class="vtr">${esc(r.prefixo || 'VTR')}</span>${r.placa ? plateHTML(r.placa, 'sm') : ''}` : r.kind === 'pessoa' ? '<span class="ped">' + (r.resultado === 'entrega' ? 'ENTREGA' : 'PEDESTRE') + '</span>' : plateHTML(r.placa, 'sm');
+  const pill = r.alerta ? '<span class="pill disc">Alerta</span>' : !['ok', 'pessoa', 'vtr'].includes(r.resultado) ? `<span class="pill ${c}">${r.empresa ? esc(r.empresa) : l}</span>` : '<span></span>';
+  const det = r.kind === 'viatura' ? ['KM ' + fmtKm(r.km) + (r.kmRodados != null ? ' (' + fmtKm(r.kmRodados) + ' km)' : ''), r.destino]
+    : [r.kind === 'pessoa' ? r.documento : r.veiculo, r.destino];
   return `<li class="litem" data-k="${esc(r.chave || r.placa)}"><span class="t">${showDate ? fmtDT(r.ts) : fmtH(r.ts)}</span>
-    <div class="who"><div class="vtop">${ident}<span class="tag ${r.tipo === 'entrada' ? 'e' : 's'}">${r.tipo === 'entrada' ? 'ENTRADA' : 'SAÍDA'}</span></div><b>${esc(r.nome || 'Não identificado')}</b><small>${esc([r.kind === 'pessoa' ? r.documento : r.veiculo, r.destino, r.sentinela ? 'Sent.: ' + r.sentinela : ''].filter(Boolean).join(' · '))}</small></div>
+    <div class="who"><div class="vtop">${ident}<span class="tag ${r.tipo === 'entrada' ? 'e' : 's'}">${r.kind === 'viatura' ? (r.tipo === 'entrada' ? 'RETORNO' : 'SAÍDA') : r.tipo === 'entrada' ? 'ENTRADA' : 'SAÍDA'}</span></div><b>${esc(r.nome || 'Não identificado')}</b><small>${esc([...det, r.sentinela ? 'Sent.: ' + r.sentinela : ''].filter(Boolean).join(' · '))}</small></div>
     ${pill}${r.obs ? `<div class="obs">${esc(r.obs)}</div>` : ''}</li>`;
 }
 function abrirRegistro(k) {
+  if (k.startsWith('VTR:')) { if (Dados.T.has(k.slice(4))) abrirViatura(k.slice(4)); else showHistory(k); return; }
   if (!k.startsWith('P:')) { showResult(k, 'livro'); return; }
   const regs = Dados.R.filter((r) => r.chave === k).sort((a, b) => b.ts - a.ts); const r = regs[0]; if (!r) return;
   const foto = regs.find((x) => x.foto);
@@ -450,19 +494,20 @@ async function renderLivro() {
   const ins = insideList(), late = new Map(atrasados().map((x) => [String(x.r.id), x]));
   $('#insideList').innerHTML = ins.length ? ins.map((r) => {
     const lt = late.get(String(r.id));
-    return `<li class="litem ${lt ? 'late' : ''}" data-k="${esc(r.chave || r.placa)}"><span class="t">${fmtDT(r.ts)}</span><div class="who"><div class="vtop">${r.kind === 'pessoa' ? '<span class="ped">PEDESTRE</span>' : plateHTML(r.placa, 'sm')}${visitante(r) ? '<span class="pill info">Visitante</span>' : ''}</div><b>${esc(r.nome || 'Não identificado')}</b><small>${esc([r.kind === 'pessoa' ? r.documento : r.veiculo, r.destino].filter(Boolean).join(' · '))}</small></div>
+    return `<li class="litem ${lt ? 'late' : ''}" data-k="${esc(r.chave || r.placa)}"><span class="t">${fmtDT(r.ts)}</span><div class="who"><div class="vtop">${r.kind === 'pessoa' ? pedTag(r) : plateHTML(r.placa, 'sm')}${visitante(r) ? '<span class="pill info">Visitante</span>' : ''}</div><b>${esc(r.nome || 'Não identificado')}</b><small>${esc([r.kind === 'pessoa' ? r.documento : r.veiculo, r.destino].filter(Boolean).join(' · '))}</small></div>
       <button class="btn sm" type="button" data-out="${esc(r.chave || r.placa)}">Saída</button>${lt ? `<div class="late-t">Passou ${fmtDur(lt.exc)} do ${esc(lt.mot)}</div>` : ''}</li>`;
   }).join('') : '<li class="empty">Ninguém registrado dentro da unidade.</li>';
   let day;
   try { day = (await Dados.registrosPeriodo(a, b)).sort((x, y) => y.ts - x.ts); } catch (e) { $('#livroList').innerHTML = `<li class="empty">${esc(mensagemErro(e))}</li>`; return; }
-  const entV = day.filter((r) => r.tipo === 'entrada' && r.kind !== 'pessoa').length, entP = day.filter((r) => r.tipo === 'entrada' && r.kind === 'pessoa').length;
+  const entV = day.filter((r) => r.tipo === 'entrada' && (!r.kind || r.kind === 'veiculo')).length, entP = day.filter((r) => r.tipo === 'entrada' && r.kind === 'pessoa').length;
   const nao = day.filter((r) => r.tipo === 'entrada' && r.resultado === 'nao').length, oc = day.filter((r) => r.alerta || r.resultado === 'bloq').length;
   $('#livroStats').innerHTML = `<div class="stat"><b>${entV}</b><span>Entradas de veículos</span></div><div class="stat"><b>${entP}</b><span>Pedestres</span></div>
     <div class="stat ${nao ? 'warn' : ''}"><b>${nao}</b><span>Não cadastrados</span></div><div class="stat ${oc ? 'bad' : ''}"><b>${oc}</b><span>Bloqueios e alertas</span></div>`;
   const rows = day.filter((r) => {
-    if (livroFiltro === 'veiculo' && r.kind === 'pessoa') return false; if (livroFiltro === 'pessoa' && r.kind !== 'pessoa') return false;
+    if (livroFiltro === 'veiculo' && !(!r.kind || r.kind === 'veiculo')) return false; if (livroFiltro === 'pessoa' && r.kind !== 'pessoa') return false;
+    if (livroFiltro === 'viatura' && r.kind !== 'viatura') return false; if (livroFiltro === 'rapido' && !rapido(r)) return false;
     if (livroFiltro === 'ocorr' && !(r.alerta || ['bloq', 'venc', 'agendfora', 'nao'].includes(r.resultado))) return false;
-    return !q || norm([r.placa, r.nome, r.documento, r.obs, r.destino].join(' ')).includes(q);
+    return !q || norm([r.placa, r.prefixo, r.nome, r.documento, r.obs, r.destino, r.empresa].join(' ')).includes(q);
   });
   $('#livroList').innerHTML = rows.length ? rows.map((r) => logItem(r)).join('') : `<li class="empty">Nenhum registro em ${fmtD(iso)}.</li>`;
 }
@@ -483,7 +528,9 @@ $('#btnPassagem').onclick = () => passagem(12);
 function passagem(h) {
   const now = Date.now(), from = now - h * 36e5; const rows = Dados.R.filter((r) => r.ts >= from).sort((a, b) => a.ts - b.ts); const ins = insideList();
   const ent = rows.filter((r) => r.tipo === 'entrada'), sai = rows.filter((r) => r.tipo === 'saida');
-  const entV = ent.filter((r) => r.kind !== 'pessoa'), entP = ent.filter((r) => r.kind === 'pessoa');
+  const entV = ent.filter((r) => (!r.kind || r.kind === 'veiculo')), entP = ent.filter((r) => r.kind === 'pessoa');
+  const vtrMov = rows.filter((r) => r.kind === 'viatura'), vtrFora = [...Dados.T.values()].filter((t) => t.fora);
+  const vtrKm = vtrMov.reduce((s, r) => s + (+r.kmRodados || 0), 0);
   const vis = [...new Set(entV.filter(visitante).map((r) => r.placa + (r.nome ? ' (' + r.nome + ')' : '')))];
   const bl = [...new Set(rows.filter((r) => r.resultado === 'bloq').map((r) => r.placa))];
   const al = [...new Set(rows.filter((r) => r.alerta).map((r) => r.placa))];
@@ -491,11 +538,14 @@ function passagem(h) {
   const pend = agendadosHoje().filter((g) => !Dados.R.some((r) => r.agendadoId === g.id && r.tipo === 'entrada' && r.ts >= diaMs(hojeISO())) && agJanela(g) !== 'depois');
   const L = (arr, f) => (arr.length ? '\n' + arr.map((x) => '  • ' + f(x)).join('\n') : '');
   let t = `PASSAGEM DE SERVIÇO — PORTÃO APMG\n${fmtDT(from)} até ${fmtDT(now)} (últimas ${h} h)\nSentinela: ${CFG.sentinela || 'não informado'}\n\n`;
-  t += `Veículos: ${entV.length} entradas, ${sai.filter((r) => r.kind !== 'pessoa').length} saídas\nPedestres: ${entP.length} entradas, ${sai.filter((r) => r.kind === 'pessoa').length} saídas\n`;
+  t += `Veículos: ${entV.length} entradas, ${sai.filter((r) => (!r.kind || r.kind === 'veiculo')).length} saídas\nPedestres: ${entP.length} entradas, ${sai.filter((r) => r.kind === 'pessoa').length} saídas\n`;
+  const rap = ent.filter(rapido); if (rap.length) t += `Uber/app e entregas: ${rap.length}\n`;
+  t += `Viaturas: ${vtrMov.filter((r) => r.tipo === 'saida').length} saídas, ${vtrMov.filter((r) => r.tipo === 'entrada').length} retornos${vtrKm ? ', ' + fmtKm(vtrKm) + ' km rodados' : ''}\n`;
+  if (vtrFora.length) t += `Viaturas fora agora:${L(vtrFora, (v) => `${vtrNome(v)} — ${v.motoristaAtual || 'motorista não informado'} — saiu ${v.foraDesde ? fmtDT(v.foraDesde) : ''} com KM ${fmtKm(v.kmSaida)}${v.destinoAtual ? ' — ' + v.destinoAtual : ''}`)}\n`;
   t += `Visitantes / não cadastrados (veículos): ${vis.length}${L(vis, (x) => x)}\n`;
   t += `Alertas de veículo bloqueado: ${bl.length}${L(bl, (x) => x)}\n`;
   if (al.length) t += `Consultas especiais (lista de alerta): ${al.length}${L(al, (x) => x)}\n`;
-  t += `\nNo local agora (${ins.length}):${ins.length ? L(ins, (r) => `${r.kind === 'pessoa' ? 'Pedestre' : r.placa} — ${r.nome || 'não identificado'}${r.kind === 'pessoa' ? (r.destino ? ' — ' + r.destino : '') : r.veiculo ? ' — ' + r.veiculo : ''} (entrou ${fmtDT(r.ts)})`) : '\n  ninguém'}\n`;
+  t += `\nNo local agora (${ins.length}):${ins.length ? L(ins, (r) => `${r.kind === 'pessoa' ? (r.resultado === 'entrega' ? 'Entrega' + (r.empresa ? ' ' + r.empresa : '') : 'Pedestre') : r.placa} — ${r.nome || 'não identificado'}${r.kind === 'pessoa' ? (r.destino ? ' — ' + r.destino : '') : r.veiculo ? ' — ' + r.veiculo : ''} (entrou ${fmtDT(r.ts)})`) : '\n  ninguém'}\n`;
   if (at.length) t += `\nPermanência vencida:${L(at, (x) => `${x.r.placa || x.r.nome} — passou ${fmtDur(x.exc)} do ${x.mot}`)}\n`;
   if (pend.length) t += `\nAgendados que ainda não chegaram:${L(pend, (g) => `${g.nome}${g.placa ? ' (' + g.placa + ')' : ''} — ${[g.horaIni, g.horaFim].filter(Boolean).join(' às ') || 'dia todo'}${g.destino ? ' — ' + g.destino : ''}`)}\n`;
   if (obs.length) t += `\nObservações:${L(obs, (r) => `${fmtH(r.ts)} ${r.placa || r.nome}: ${r.obs}`)}\n`;
@@ -523,10 +573,11 @@ function applyTheme() {
 const PAPEL_TXT = { admin: 'Administrador', gestor: 'Gestor (edita o cadastro)', sentinela: 'Sentinela (consulta e registra)', local: 'Modo local' };
 function renderMais() {
   $('#cfgSent').value = CFG.sentinela || ''; $('#cfgSom').checked = !!CFG.som; $('#cfgAuto').checked = !!CFG.auto; $('#cfgTheme').value = CFG.theme || '';
-  $('#cfgLimVis').value = CFG.limVisit; $('#cfgLimGer').value = CFG.limGeral;
+  $('#cfgLimVis').value = CFG.limVisit; $('#cfgLimGer').value = CFG.limGeral; $('#cfgLimRap').value = CFG.limRapido;
   const cb = $('#contaBox');
   if (naNuvem()) {
-    cb.innerHTML = `<h3>Conta e sincronização</h3><p><b>${esc(Dados.user.email)}</b><br>${esc(PAPEL_TXT[Dados.papel] || Dados.papel)}</p>
+    cb.innerHTML = `<h3>Conta e sincronização</h3><p><b>${esc(Dados.user.email)}</b><br>${esc(PAPEL_TXT[Dados.papel] || Dados.papel)}${Dados.geral ? ' · conta geral da guarda' : ''}</p>
+      <p>Código deste celular: <b>${esc(codigoAparelho())}</b></p>
       <p>${Dados.pendente ? 'Há registros esperando internet para subir.' : Dados.online ? 'Sincronizado com os outros celulares da guarda.' : 'Sem conexão com a nuvem. O app continua funcionando e envia tudo quando a internet voltar.'}</p>
       <div class="btnrow"><button class="btn" id="btnSair" type="button">Sair da conta</button><button class="btn ghost" id="btnModoLocal" type="button">Usar só neste aparelho</button></div>`;
     $('#btnSair').onclick = async () => { if (!await ask({ title: 'Sair da conta?', msg: 'Para usar de novo, entre com e-mail e senha.', ok: 'Sair' })) return; Dados.parar(); const { auth, a } = Dados.fb; await auth.signOut(a); };
@@ -544,33 +595,96 @@ function renderMais() {
   $('#btnOldLogs').hidden = naNuvem() && !ehAdminNuvem();
   $('#btnWipe').hidden = naNuvem();
   $('#btnMigrar').hidden = true;
-  if (naNuvem() && podeGerir()) Dados.contarLocal().then((l) => { const n = l.veiculos.length + l.alertas.length + l.agendados.length; const b = $('#btnMigrar'); b.hidden = !n; b.textContent = `Enviar para a nuvem o cadastro deste aparelho (${n})`; }).catch(() => {});
+  if (naNuvem() && podeGerir()) Dados.contarLocal().then((l) => { const n = l.veiculos.length + l.alertas.length + l.agendados.length + l.viaturas.length; const b = $('#btnMigrar'); b.hidden = !n; b.textContent = `Enviar para a nuvem o cadastro deste aparelho (${n})`; }).catch(() => {});
   const fotos = [...Dados.V.values()].filter((v) => v.foto).length;
-  $('#dbInfo').textContent = `${Dados.V.size} veículos (${fotos} com foto) · ${Dados.G.size} agendamentos · ${Dados.A.size} na lista de alerta · ${Dados.R.length} registros recentes`;
+  $('#dbInfo').textContent = `${Dados.V.size} veículos (${fotos} com foto) · ${Dados.T.size} viaturas · ${Dados.G.size} agendamentos · ${Dados.A.size} na lista de alerta · ${Dados.R.length} registros recentes`;
 }
+/** Código fixo deste celular (para autorizar a conta geral da guarda). */
+function codigoAparelho() { const c = CFG.deviceId || ''; return c.slice(0, 4) + '-' + c.slice(4); }
+function novoCodigoAparelho() { const A = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; let c = ''; const r = crypto.getRandomValues(new Uint8Array(8)); for (const x of r) c += A[x % A.length]; return c; }
 async function renderAcessos() {
   const box = $('#acessosBox'); box.innerHTML = '<h3>Acessos ao Portão</h3><p class="count"><span class="spin"></span> Carregando…</p>';
   try {
     const { pendentes, contas } = await Dados.listarAcessos();
-    box.innerHTML = `<h3>Acessos ao Portão</h3><p>Quem entra com a conta (a mesma da Agenda serve) aparece aqui para você liberar. Sentinela consulta e registra; gestor também edita cadastro, agendados e lista de alerta.</p>
-      ${pendentes.length ? `<h3 class="sec">Pedidos (${pendentes.length})</h3>${pendentes.map((e) => `<div class="acc"><span>${esc(e)}</span><button class="btn sm ok" data-lib="${esc(e)}" data-pap="sentinela" type="button">Sentinela</button><button class="btn sm" data-lib="${esc(e)}" data-pap="gestor" type="button">Gestor</button><button class="btn sm ghost" data-rem="${esc(e)}" type="button">Recusar</button></div>`).join('')}` : '<p class="count">Nenhum pedido pendente.</p>'}
-      ${contas.length ? `<h3 class="sec">Contas</h3>${contas.map((c) => `<div class="acc"><span>${esc(c.email)}${c.ativo ? '' : ' <span class="pill bad">Bloqueada</span>'}</span>
-        <select data-papel="${esc(c.email)}" aria-label="Papel de ${esc(c.email)}"><option value="sentinela" ${c.papel === 'sentinela' ? 'selected' : ''}>Sentinela</option><option value="gestor" ${c.papel === 'gestor' ? 'selected' : ''}>Gestor</option></select>
-        <button class="btn sm" data-ativo="${esc(c.email)}" data-v="${c.ativo ? '0' : '1'}" type="button">${c.ativo ? 'Bloquear' : 'Liberar'}</button><button class="btn sm ghost" data-rem="${esc(c.email)}" type="button">Remover</button></div>`).join('')}` : ''}
+    const papelSel = (c) => `<select data-papel="${esc(c.email)}" aria-label="Papel de ${esc(c.email)}"><option value="sentinela" ${c.papel === 'sentinela' ? 'selected' : ''}>Sentinela</option><option value="gestor" ${c.papel === 'gestor' ? 'selected' : ''}>Gestor</option></select>`;
+    const gerais = contas.filter((c) => c.geral), pessoais = contas.filter((c) => !c.geral);
+    box.innerHTML = `<h3>Acessos ao Portão</h3>
+      <p>Sentinela consulta e registra; gestor também edita cadastro, viaturas, agendados e lista de alerta.</p>
+      <div class="btnrow"><button class="btn primary" id="accNovo" type="button">Criar usuário (e-mail e senha)</button><button class="btn" id="accGeral" type="button">Criar conta geral da guarda</button></div>
+      ${pendentes.length ? `<h3 class="sec">Pedidos (${pendentes.length})</h3>${pendentes.map((e) => `<div class="acc"><span>${esc(e)}</span><button class="btn sm ok" data-lib="${esc(e)}" data-pap="sentinela" type="button">Sentinela</button><button class="btn sm" data-lib="${esc(e)}" data-pap="gestor" type="button">Gestor</button><button class="btn sm ghost" data-rem="${esc(e)}" type="button">Recusar</button></div>`).join('')}` : ''}
+      ${gerais.length ? `<h3 class="sec">Conta geral da guarda</h3>${gerais.map((c) => `<div class="acc col">
+        <span><b>${esc(c.nome || 'Guarda')}</b> · ${esc(c.email)}${c.ativo ? '' : ' <span class="pill bad">Bloqueada</span>'}</span>
+        <span class="count">Celulares autorizados (${c.dispositivos.length} de ${c.maxDispositivos}): ${c.dispositivos.length ? c.dispositivos.map((d) => `<button class="chip" type="button" data-desaut="${esc(c.email)}" data-cod="${esc(d)}" title="Remover">${esc(d.slice(0, 4) + '-' + d.slice(4))} ✕</button>`).join(' ') : 'nenhum'}</span>
+        <div class="toolbar"><input data-codin="${esc(c.email)}" placeholder="Código do celular (ex.: K7QM-4PZ2)" autocapitalize="characters" aria-label="Código do celular"><button class="btn sm ok" data-aut="${esc(c.email)}" type="button" ${c.dispositivos.length >= c.maxDispositivos ? 'disabled' : ''}>Autorizar</button></div>
+        <div class="btnrow">${papelSel(c)}<button class="btn sm" data-ativo="${esc(c.email)}" data-v="${c.ativo ? '0' : '1'}" type="button">${c.ativo ? 'Bloquear' : 'Liberar'}</button><button class="btn sm ghost" data-rem="${esc(c.email)}" type="button">Remover</button></div></div>`).join('')}` : ''}
+      ${pessoais.length ? `<h3 class="sec">Usuários</h3>${pessoais.map((c) => `<div class="acc"><span>${c.nome ? '<b>' + esc(c.nome) + '</b> · ' : ''}${esc(c.email)}${c.ativo ? '' : ' <span class="pill bad">Bloqueada</span>'}</span>
+        ${papelSel(c)}<button class="btn sm" data-ativo="${esc(c.email)}" data-v="${c.ativo ? '0' : '1'}" type="button">${c.ativo ? 'Bloquear' : 'Liberar'}</button><button class="btn sm ghost" data-reset="${esc(c.email)}" type="button">Senha</button><button class="btn sm ghost" data-rem="${esc(c.email)}" type="button">Remover</button></div>`).join('')}` : ''}
       <button class="btn sm ghost" id="accReload" type="button">Atualizar lista</button>`;
+    const contaDe = (email) => contas.find((c) => c.email === email);
+    $('#accNovo').onclick = () => criarUsuarioUI(false);
+    $('#accGeral').onclick = () => criarUsuarioUI(true);
     $$('[data-lib]', box).forEach((b) => (b.onclick = async () => { await Dados.definirAcesso(b.dataset.lib, { ativo: true, papel: b.dataset.pap }); toast('Acesso liberado'); renderAcessos(); }));
     $$('[data-papel]', box).forEach((s) => (s.onchange = async () => { await Dados.definirAcesso(s.dataset.papel, { papel: s.value }); toast('Papel atualizado'); }));
     $$('[data-ativo]', box).forEach((b) => (b.onclick = async () => { await Dados.definirAcesso(b.dataset.ativo, { ativo: b.dataset.v === '1' }); renderAcessos(); }));
-    $$('[data-rem]', box).forEach((b) => (b.onclick = async () => { if (!await ask({ title: 'Remover ' + b.dataset.rem + '?', msg: 'A pessoa perde o acesso ao Portão.', ok: 'Remover', danger: true })) return; await Dados.removerAcesso(b.dataset.rem); renderAcessos(); }));
+    $$('[data-rem]', box).forEach((b) => (b.onclick = async () => { if (!await ask({ title: 'Remover ' + b.dataset.rem + '?', msg: 'A conta perde o acesso ao Portão.', ok: 'Remover', danger: true })) return; await Dados.removerAcesso(b.dataset.rem); renderAcessos(); }));
+    $$('[data-reset]', box).forEach((b) => (b.onclick = async () => {
+      try { await Dados.fb.auth.sendPasswordResetEmail(Dados.fb.a, b.dataset.reset); toast('Link para criar nova senha enviado para ' + b.dataset.reset, 5000); } catch (e) { toast(mensagemErro(e), 5000); }
+    }));
+    $$('[data-aut]', box).forEach((b) => (b.onclick = async () => {
+      const c = contaDe(b.dataset.aut), cod = normDoc($(`[data-codin="${CSS.escape(b.dataset.aut)}"]`, box).value);
+      if (cod.length !== 8) { toast('O código tem 8 letras/números, como aparece no celular da guarda.'); return; }
+      if (c.dispositivos.includes(cod)) { toast('Este celular já está autorizado.'); return; }
+      if (c.dispositivos.length >= c.maxDispositivos) { toast(`Limite de ${c.maxDispositivos} celulares. Remova um antes.`); return; }
+      await Dados.definirAcesso(c.email, { dispositivos: [...c.dispositivos, cod] }); toast('Celular autorizado'); renderAcessos();
+    }));
+    $$('[data-desaut]', box).forEach((b) => (b.onclick = async () => {
+      const c = contaDe(b.dataset.desaut); if (!await ask({ title: 'Remover o celular ' + b.dataset.cod + '?', msg: 'Ele deixa de abrir o app com a conta geral.', ok: 'Remover', danger: true })) return;
+      await Dados.definirAcesso(c.email, { dispositivos: c.dispositivos.filter((d) => d !== b.dataset.cod) }); renderAcessos();
+    }));
     $('#accReload').onclick = renderAcessos;
   } catch (e) { box.innerHTML = `<h3>Acessos ao Portão</h3><div class="gmsg">${esc(mensagemErro(e))}</div>`; }
 }
-$('#cfgSent').onchange = async (e) => { CFG.sentinela = e.target.value.trim(); await saveCfg(); renderHeader(); toast('Sentinela atualizado'); };
+function criarUsuarioUI(geral) {
+  openSheet(geral ? 'Conta geral da guarda' : 'Criar usuário', `
+    <p class="count">${geral
+      ? 'Uma conta única para os celulares fixos do portão. Ela só abre nos celulares que você autorizar pelo código que aparece na tela deles. Em cada serviço, o app pede o nome do sentinela.'
+      : 'Crie o acesso com e-mail e senha e passe a senha para a pessoa. Se o e-mail já tiver conta (ex.: da Agenda do Cadete), o acesso é liberado e ela continua com a senha que já usa.'}</p>
+    <form class="view" id="cuForm" autocomplete="off">
+      <label class="f" for="cuNome">${geral ? 'Nome da conta' : 'Nome (posto/graduação e nome)'}<input id="cuNome" value="${geral ? 'Guarda APMG' : ''}"></label>
+      <label class="f" for="cuEmail">E-mail de login *<input type="email" id="cuEmail" autocomplete="off" placeholder="${geral ? 'Ex.: guarda.apmg@gmail.com' : 'nome@exemplo.com'}"></label>
+      <label class="f" for="cuSenha">Senha * (mínimo 6 caracteres)<input type="text" id="cuSenha" autocomplete="new-password" minlength="6"></label>
+      <div class="grid2">
+        <label class="f" for="cuPapel">Papel<select id="cuPapel"><option value="sentinela">Sentinela</option><option value="gestor">Gestor</option></select></label>
+        ${geral ? '<label class="f" for="cuMax">Celulares permitidos<input type="number" id="cuMax" min="1" max="6" value="2"></label>' : ''}
+      </div>
+      ${geral ? '' : '<p class="count">Use um e-mail real: é por ele que a pessoa recupera a senha.</p>'}
+      <div class="gmsg" id="cuMsg" hidden></div>
+      <button class="btn primary big" type="submit" id="cuGo">Criar</button>
+    </form>`);
+  $('#cuForm').onsubmit = async (e) => {
+    e.preventDefault();
+    const email = $('#cuEmail').value.trim().toLowerCase(), senha = $('#cuSenha').value, msg = $('#cuMsg');
+    msg.hidden = true;
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) { msg.hidden = false; msg.textContent = 'E-mail inválido.'; return; }
+    if (senha.length < 6) { msg.hidden = false; msg.textContent = 'A senha precisa ter pelo menos 6 caracteres.'; return; }
+    const b = $('#cuGo'); b.disabled = true; b.innerHTML = '<span class="spin"></span> Criando…';
+    try {
+      const r = await Dados.criarUsuario({ email, senha, nome: $('#cuNome').value.trim(), papel: $('#cuPapel').value, geral, maxDispositivos: geral ? Math.max(1, Math.min(6, +$('#cuMax').value || 2)) : 0 });
+      openSheet(geral ? 'Conta geral criada' : 'Usuário criado', `<div class="verdict ok"><h3>${r.jaExistia ? 'Acesso liberado' : 'Conta criada'}</h3><p>${esc(email)}</p></div>
+        ${r.jaExistia ? '<p>Este e-mail já tinha conta. A senha digitada <b>não</b> foi trocada: a pessoa entra com a senha que já usa (ou usa "Esqueci a senha").</p>' : `<p>Passe para a pessoa: e-mail <b>${esc(email)}</b> e a senha que você definiu. Ela já pode entrar, sem confirmar o e-mail.</p>`}
+        ${geral ? '<p>Agora, em cada celular da guarda: abra o app, escolha "Com a guarda", entre com esta conta e anote o código que aparece. Depois autorize os códigos em Mais → Acessos ao Portão.</p>' : ''}
+        <button class="btn primary" id="cuOk" type="button">Concluir</button>`);
+      $('#cuOk').onclick = () => { closeSheet(); renderAcessos(); };
+    } catch (err) { msg.hidden = false; msg.textContent = mensagemErro(err); b.disabled = false; b.textContent = 'Criar'; }
+  };
+}
+$('#cfgSent').onchange = async (e) => { CFG.sentinela = e.target.value.trim(); CFG.sentinelaEm = Date.now(); await saveCfg(); renderHeader(); toast('Sentinela atualizado'); };
 $('#cfgSom').onchange = async (e) => { CFG.som = e.target.checked; await saveCfg(); if (CFG.som) alertFx('ok'); };
 $('#cfgAuto').onchange = async (e) => { CFG.auto = e.target.checked; await saveCfg(); };
 $('#cfgTheme').onchange = async (e) => { CFG.theme = e.target.value; await saveCfg(); applyTheme(); };
 $('#cfgLimVis').onchange = async (e) => { CFG.limVisit = Math.max(0, +e.target.value || 0); await saveCfg(); checarPermanencia(); };
 $('#cfgLimGer').onchange = async (e) => { CFG.limGeral = Math.max(0, +e.target.value || 0); await saveCfg(); checarPermanencia(); };
+$('#cfgLimRap').onchange = async (e) => { CFG.limRapido = Math.max(0, +e.target.value || 0); await saveCfg(); checarPermanencia(); };
 $('#btnPin').onclick = async () => {
   if (!await needPin()) return;
   const p = await ask({ title: CFG.pin ? 'Novo PIN' : 'Definir PIN', msg: 'Use de 4 a 8 números.', ok: 'Salvar', input: { type: 'password', mode: 'numeric', ph: 'Novo PIN' } }); if (p === null) return;
@@ -583,15 +697,14 @@ $('#btnPinOff').onclick = async () => { if (!await needPin()) return; CFG.pin = 
 $('#btnMigrar').onclick = async () => {
   if (!await needGestor()) return;
   const l = await Dados.contarLocal();
-  if (!await ask({ title: 'Enviar para a nuvem?', msg: `${l.veiculos.length} veículos, ${l.agendados.length} agendamentos e ${l.alertas.length} alertas deste aparelho vão para a nuvem. Placas iguais serão substituídas.`, ok: 'Enviar' })) return;
-  await Dados.salvarVarios('veiculos', l.veiculos); await Dados.salvarVarios('agendados', l.agendados); await Dados.salvarVarios('alertas', l.alertas);
-  await Dados.idbClear('veiculos'); await Dados.idbClear('agendados'); await Dados.idbClear('alertas');
+  if (!await ask({ title: 'Enviar para a nuvem?', msg: `${l.veiculos.length} veículos, ${l.viaturas.length} viaturas, ${l.agendados.length} agendamentos e ${l.alertas.length} alertas deste aparelho vão para a nuvem. Itens iguais serão substituídos.`, ok: 'Enviar' })) return;
+  for (const c of ['veiculos', 'viaturas', 'agendados', 'alertas']) { await Dados.salvarVarios(c, l[c]); await Dados.idbClear(c); }
   toast('Cadastro enviado para a nuvem'); renderMais();
 };
 $('#btnBackup').onclick = async () => {
   if (!await needGestor()) return;
   const registros = naNuvem() ? Dados.R : await Dados.idbAll('registros');
-  const data = { app: 'portao-apmg', versao: 2, geradoEm: new Date().toISOString(), veiculos: [...Dados.V.values()], alertas: [...Dados.A.values()], agendados: [...Dados.G.values()], registros };
+  const data = { app: 'portao-apmg', versao: 2, geradoEm: new Date().toISOString(), veiculos: [...Dados.V.values()], alertas: [...Dados.A.values()], agendados: [...Dados.G.values()], viaturas: [...Dados.T.values()], registros };
   download('backup-portao-apmg-' + hojeISO() + '.json', JSON.stringify(data), 'application/json'); toast('Backup salvo em Downloads');
 };
 $('#restoreIn').onchange = async (e) => {
@@ -600,7 +713,7 @@ $('#restoreIn').onchange = async (e) => {
     const d = JSON.parse(await f.text()); if (d.app !== 'portao-apmg') throw new Error('arquivo');
     const n = (k) => (d[k] || []).length;
     if (!await ask({ title: 'Restaurar backup?', msg: `${n('veiculos')} veículos, ${n('agendados')} agendamentos, ${n('alertas')} alertas${naNuvem() ? '' : ' e ' + n('registros') + ' registros'} serão juntados aos dados atuais. Itens iguais serão substituídos.`, ok: 'Restaurar' })) return;
-    await Dados.salvarVarios('veiculos', d.veiculos || []); await Dados.salvarVarios('alertas', d.alertas || []); await Dados.salvarVarios('agendados', d.agendados || []);
+    await Dados.salvarVarios('veiculos', d.veiculos || []); await Dados.salvarVarios('alertas', d.alertas || []); await Dados.salvarVarios('agendados', d.agendados || []); await Dados.salvarVarios('viaturas', d.viaturas || []);
     if (!naNuvem()) {
       const have = new Set((await Dados.idbAll('registros')).map((r) => r.ts + (r.chave || r.placa) + r.tipo));
       await Dados.idbPutMany('registros', (d.registros || []).filter((r) => !have.has(r.ts + (r.chave || r.placa) + r.tipo)).map(({ id, ...r }) => ({ kind: 'veiculo', chave: r.placa, ...r })));
@@ -620,7 +733,7 @@ $('#btnWipe').onclick = async () => {
   if (!await needPin()) return;
   const v = await ask({ title: 'Apagar tudo?', msg: 'Cadastro, fotos, agendados, lista de alerta e livro serão apagados deste celular. Digite APAGAR para confirmar.', ok: 'Apagar tudo', danger: true, input: { ph: 'APAGAR' } });
   if (v === null) return; if (v.trim().toUpperCase() !== 'APAGAR') { toast('Nada foi apagado'); return; }
-  for (const s of ['veiculos', 'registros', 'alertas', 'agendados']) await Dados.idbClear(s);
+  for (const s of ['veiculos', 'registros', 'alertas', 'agendados', 'viaturas']) await Dados.idbClear(s);
   await Dados.iniciarLocal(); toast('Tudo apagado');
 };
 
@@ -721,13 +834,28 @@ function gateErro(t) {
 }
 async function contaMudou(u, avisarPendente) {
   if (!u) { Dados.parar(); gateEntrar(); return; }
-  if (!u.emailVerified) { gateVerificar(u); return; }
   try {
     const s = await Dados.situacao(u);
+    // contas criadas pelo administrador entram sem confirmar e-mail; as demais precisam confirmar
+    if (!u.emailVerified && !(s.s !== 'pendente' && s.criadoPeloAdmin)) { gateVerificar(u); return; }
     if (s.s === 'pendente') { gatePendente(u); if (avisarPendente) gateMsg('Ainda não liberada.'); }
     else if (s.s === 'bloqueado') gateBloqueado(u);
-    else { hideGate(); await Dados.iniciarNuvem(u, s.papel); }
+    else if (s.geral && !(s.dispositivos || []).includes(CFG.deviceId)) gateAparelho(u);
+    else {
+      hideGate(); Dados.geral = !!s.geral;
+      // conta geral: o nome do sentinela vale por um serviço (12 h); depois o app pergunta de novo
+      if (s.geral && Date.now() - (CFG.sentinelaEm || 0) > 12 * 36e5) { CFG.sentinela = ''; await saveCfg(); }
+      await Dados.iniciarNuvem(u, s.papel);
+      if (s.geral) setTimeout(garantirSentinela, 400);
+    }
   } catch (e) { gateErro(mensagemErro(e)); }
+}
+function gateAparelho(u) {
+  gate(`<h1>Celular não autorizado</h1><p>A conta <b>${esc(u.email)}</b> é a conta geral da guarda e só abre nos celulares autorizados.</p>
+    <div class="setrow" style="text-align:center"><p>Código deste celular</p><b style="font:700 36px/1 var(--display);letter-spacing:.12em">${esc(codigoAparelho())}</b></div>
+    <p>Envie este código ao administrador. Ele autoriza em Mais → Acessos ao Portão.</p>
+    <div class="gmsg" id="gMsg" hidden></div><button class="btn primary big" id="gDeNovo" type="button">Verificar de novo</button>${gateSair()}`);
+  $('#gDeNovo').onclick = () => contaMudou(u, true); ligarSair();
 }
 async function seed() {
   const t = Date.now(), ontem = isoOf(new Date(t - 864e5)), hoje = hojeISO();
@@ -738,13 +866,17 @@ async function seed() {
     { placa: 'QWE9F87', nome: 'Exemplo — Ana Souza', vinculo: 'Visitante', marca: 'Hyundai', modelo: 'HB20', cor: 'Vermelho', setor: 'Visita à Seção de Ensino', validade: ontem, status: 'ativo' },
   ].map((v) => ({ ...v, exemplo: true, criadoEm: t }));
   await Dados.idbPutMany('veiculos', ex);
-  await Dados.idbPutMany('agendados', [{ id: 'exemplo-ag', nome: 'Exemplo — Técnico da manutenção', documento: 'RG 0.000.000-0', placa: 'MNT5A01', veiculo: 'Fiat Strada', cor: 'Branca', destino: 'Seção de Logística', autorizadoPor: 'Of. de Dia', data: hoje, horaIni: '08:00', horaFim: '18:00', criadoEm: t }]);
-  await Dados.idbPutMany('alertas', [{ placa: 'XYZ9K88', motivo: 'Exemplo de alerta — veículo de interesse', fonte: 'Teste do app', ativo: true, criadoEm: t }]);
-  CFG.seeded = true; await saveCfg();
+  await Dados.idbPutMany('agendados', [{ exemplo: true, id: 'exemplo-ag', nome: 'Exemplo — Técnico da manutenção', documento: 'RG 0.000.000-0', placa: 'MNT5A01', veiculo: 'Fiat Strada', cor: 'Branca', destino: 'Seção de Logística', autorizadoPor: 'Of. de Dia', data: hoje, horaIni: '08:00', horaFim: '18:00', criadoEm: t }]);
+  await Dados.idbPutMany('alertas', [{ exemplo: true, placa: 'XYZ9K88', motivo: 'Exemplo de alerta — veículo de interesse', fonte: 'Teste do app', ativo: true, criadoEm: t }]);
+  CFG.seeded = true; await seedVtr();
+}
+async function seedVtr() {
+  await Dados.idbPutMany('viaturas', [{ id: 'EX101', prefixo: 'EX-101', placa: 'PMP1R23', tipo: 'Caminhonete', marca: 'Toyota', modelo: 'Hilux', cor: 'Caracterizada', kmAtual: 48210, ativo: true, exemplo: true, criadoEm: Date.now() }]);
+  CFG.seededVtr = true; await saveCfg();
 }
 async function iniciarModo() {
   if (CFG.modo === 'local' || !Dados.configurado()) {
-    hideGate(); if (!CFG.seeded) await seed(); await Dados.iniciarLocal(); return;
+    hideGate(); if (!CFG.seeded) await seed(); else if (!CFG.seededVtr) await seedVtr(); await Dados.iniciarLocal(); return;
   }
   gateCarregando('Conectando à nuvem…');
   try { const { auth, a } = await Dados.carregarFB(); auth.onAuthStateChanged(a, (u) => contaMudou(u)); }
@@ -753,6 +885,7 @@ async function iniciarModo() {
 (async () => {
   try { await Dados.abrirIDB(); const c = await Dados.cfgGet(); if (c) CFG = { ...CFG, ...c }; }
   catch (e) { toast('Não foi possível abrir o armazenamento do navegador. Saia do modo anônimo.', 6000); }
+  if (!CFG.deviceId) { CFG.deviceId = novoCodigoAparelho(); await saveCfg(); }
   applyTheme(); $('#clock').textContent = fmtH(Date.now());
   if (!CFG.modo && Dados.configurado()) gateEscolha(); else await iniciarModo();
   if ('serviceWorker' in navigator && location.protocol !== 'file:') navigator.serviceWorker.register('sw.js').catch(() => {});

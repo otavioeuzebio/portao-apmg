@@ -21,7 +21,7 @@
 <header class="top">
   <div class="brand">
     <span class="brand-mark">APMG</span>
-    <div><b>Portão</b><small id="hdrSent">Sentinela não informado</small></div>
+    <div><b>Portão</b><small id="hdrSent" role="button" tabindex="0" style="cursor:pointer">Sentinela não informado</small></div>
   </div>
   <div class="clock"><b id="clock">--:--</b><small id="hdrInside"><span class="sync" id="syncDot" hidden></span>0 no local</small></div>
 </header>
@@ -33,6 +33,11 @@
     <div class="seg" id="portaoSeg" role="group" aria-label="O que controlar">
       <button type="button" data-m="veiculo" aria-pressed="true">Veículo</button>
       <button type="button" data-m="pessoa" aria-pressed="false">Pedestre</button>
+      <button type="button" data-m="viatura" aria-pressed="false">Viatura</button>
+    </div>
+    <div class="btnrow" id="rapidoRow">
+      <button class="btn" id="btnApp" type="button">Uber / app</button>
+      <button class="btn" id="btnEnt" type="button">Entregador</button>
     </div>
 
     <div class="view" id="modoVeiculo">
@@ -86,6 +91,21 @@
       <ul class="loglist" id="pesInside"></ul>
     </div>
 
+    <div class="view" id="modoViatura" hidden>
+      <form id="vtrBusca" class="manual" autocomplete="off">
+        <label class="f" for="vtrIn">Prefixo ou placa da viatura</label>
+        <div class="row">
+          <input id="vtrIn" autocapitalize="characters" spellcheck="false" placeholder="Ex.: 13-1234">
+          <button class="btn primary" type="submit">Abrir</button>
+        </div>
+      </form>
+      <p class="count">A câmera, na aba Veículo, também reconhece a placa das viaturas.</p>
+      <h3 class="sec">Viaturas fora</h3>
+      <ul class="loglist" id="vtrFora"></ul>
+      <h3 class="sec">Na unidade</h3>
+      <ul class="vlist" id="vtrDentro"></ul>
+    </div>
+
     <h3 class="sec" id="espTit">Esperados hoje</h3>
     <ul class="loglist" id="esperados"></ul>
     <h3 class="sec">Últimos registros</h3>
@@ -96,6 +116,7 @@
   <section class="view" id="v-cadastro" hidden>
     <div class="seg" id="cadSeg" role="group" aria-label="Cadastro">
       <button type="button" data-c="veiculos" aria-pressed="true">Veículos</button>
+      <button type="button" data-c="viaturas" aria-pressed="false">Viaturas</button>
       <button type="button" data-c="agendados" aria-pressed="false">Agendados</button>
       <button type="button" data-c="alertas" aria-pressed="false">Alerta</button>
     </div>
@@ -124,6 +145,8 @@
       <button class="chip" type="button" data-f="todos" aria-pressed="true">Todos</button>
       <button class="chip" type="button" data-f="veiculo" aria-pressed="false">Veículos</button>
       <button class="chip" type="button" data-f="pessoa" aria-pressed="false">Pedestres</button>
+      <button class="chip" type="button" data-f="viatura" aria-pressed="false">Viaturas</button>
+      <button class="chip" type="button" data-f="rapido" aria-pressed="false">Uber e entregas</button>
       <button class="chip" type="button" data-f="ocorr" aria-pressed="false">Ocorrências</button>
     </div>
     <ul class="loglist" id="livroList"></ul>
@@ -170,6 +193,7 @@
       <div class="grid2">
         <label class="f" for="cfgLimVis">Visitantes e pedestres (horas)<input type="number" id="cfgLimVis" min="0" max="72" step="0.5" inputmode="decimal"></label>
         <label class="f" for="cfgLimGer">Qualquer veículo (horas)<input type="number" id="cfgLimGer" min="0" max="240" step="1" inputmode="numeric"></label>
+        <label class="f" for="cfgLimRap">Uber e entregadores (minutos)<input type="number" id="cfgLimRap" min="0" max="600" step="5" inputmode="numeric"></label>
       </div>
     </div>
     <div class="setrow" id="pinBox">
@@ -216,6 +240,7 @@
 <script src="js/dados.js"></script>
 <script src="js/ocr.js"></script>
 <script src="js/importar.js"></script>
+<script src="js/viaturas.js"></script>
 <script src="js/relatorios.js"></script>
 <script src="js/app.js"></script>
 </body>

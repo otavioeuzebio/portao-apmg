@@ -34,6 +34,31 @@ const IMP_ALVOS = {
       return nv;
     },
   },
+  viaturas: {
+    nome: 'Viaturas da APMG',
+    campos: [
+      ['prefixo', 'Prefixo', ['prefixo', 'vtr', 'viatura', 'prefixo vtr', 'n vtr', 'numero vtr', 'numero']],
+      ['placa', 'Placa', ['placa', 'placas']],
+      ['tipo', 'Tipo', ['tipo', 'especie', 'categoria']],
+      ['marcaModelo', 'Marca + modelo', ['marca/modelo', 'marca e modelo', 'marca modelo']],
+      ['marca', 'Marca', ['marca', 'fabricante']],
+      ['modelo', 'Modelo', ['modelo', 'veiculo']],
+      ['cor', 'Cor / caracterização', ['cor', 'caracterizacao']],
+      ['km', 'KM atual', ['km', 'km atual', 'quilometragem', 'odometro', 'hodometro']],
+      ['obs', 'Observação', ['obs', 'observacao', 'observacoes', 'situacao']],
+    ],
+    valido: (o) => !!(String(o.prefixo || '').trim() || validPlate(normPlate(o.placa))),
+    chave: (o) => idViatura(String(o.prefixo || '').trim(), validPlate(normPlate(o.placa)) ? o.placa : ''),
+    montar(o, old) {
+      const placa = validPlate(normPlate(o.placa)) ? normPlate(o.placa) : '';
+      const nv = { ...(old || { ativo: true, criadoEm: Date.now() }), prefixo: String(o.prefixo || '').trim().toUpperCase(), placa, atualizadoEm: Date.now() };
+      nv.id = idViatura(nv.prefixo, placa); delete nv.exemplo;
+      for (const k of ['marca', 'modelo', 'cor', 'obs']) if (o[k]) nv[k] = o[k];
+      if (o.tipo) nv.tipo = TIPOS_VTR.find((x) => norm(o.tipo).startsWith(norm(x).slice(0, 4))) || o.tipo;
+      const km = parseKm(o.km); if (!isNaN(km)) nv.kmAtual = km;
+      return nv;
+    },
+  },
   alertas: {
     nome: 'Lista de alerta',
     campos: [
@@ -190,6 +215,7 @@ function abrirImportar(alvo = 'veiculos') {
   $('#impModelo').onclick = () => {
     const mod = {
       veiculos: ['Placa;Nome;Posto/Grad;Vínculo;Marca;Modelo;Cor;Setor/Pelotão;Telefone;Validade;Situação;Observação', 'BRA2E19;Fulano de Tal;Cad. PM;Cadete;Volkswagen;Gol;Prata;Pelotão Alfa;(41) 99999-0000;10/12/2027;Ativo;'],
+      viaturas: ['Prefixo;Placa;Tipo;Marca;Modelo;Cor;KM atual;Observação', '13-1234;PMP1R23;Caminhonete;Toyota;Hilux;Caracterizada;48210;'],
       alertas: ['Placa;Motivo;Fonte;Marca/Modelo;Cor;Válido até;Observação', 'ABC1D23;Veículo de interesse;Determinação do Comando;Fiat Uno;Branco;31/12/2026;'],
       agendados: ['Nome;Documento;Placa;Veículo;Cor;Destino;Autorizado por;Data;Até a data;Horário;Observação', 'Fulano de Tal;RG 12.345.678-9;BRA2E19;Fiat Strada;Branca;Seção de Logística — manutenção;Cap. Fulano;05/11/2026;;08h às 12h;'],
     }[IMP.alvo];
@@ -229,7 +255,7 @@ function impObj(row) {
   const o = {};
   IMP.map.forEach((f, ci) => {
     if (!f) return; const val = (row.r[ci] || '').trim(); if (!val) return;
-    if (f === 'marcaModelo' && IMP.alvo === 'veiculos') { const p = val.split(/\s*[\/\-–]\s*|\s+/); o.marca = o.marca || p[0]; o.modelo = o.modelo || p.slice(1).join(' '); }
+    if (f === 'marcaModelo' && (IMP.alvo === 'veiculos' || IMP.alvo === 'viaturas')) { const p = val.split(/\s*[\/\-–]\s*|\s+/); o.marca = o.marca || p[0]; o.modelo = o.modelo || p.slice(1).join(' '); }
     else if (f === 'placa') { if (!o.placa || !validPlate(normPlate(o.placa))) o.placa = val; }
     else o[f] = o[f] ? o[f] + ' ' + val : val;
   });
