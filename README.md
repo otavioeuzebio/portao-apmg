@@ -75,4 +75,4 @@ Settings → Pages → *Deploy from a branch* → **main** / **(root)** → Save
 
 Arquivos estáticos, sem build. Bibliotecas sob demanda: Tesseract.js (placas), SheetJS (planilhas), Mammoth (Word),
 pdf.js (PDF), jsPDF + AutoTable (relatório), Firebase (nuvem). Testes: `node --test tests/*.test.mjs`.
-Ao publicar mudanças, altere `CACHE` em `sw.js`.
+Ao publicar mudanças, aumente `VERSAO` em `sw.js` e o `?v=` dos arquivos no `index.html`.
