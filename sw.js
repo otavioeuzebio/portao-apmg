@@ -1,6 +1,6 @@
 /* Portão APMG — funciona offline depois do primeiro acesso.
    Ao publicar mudanças, aumente VERSAO aqui e o ?v= dos arquivos no index.html. */
-const VERSAO = '2.4.2'; // igual ao ?v= dos arquivos no index.html
+const VERSAO = '2.4.3'; // igual ao ?v= dos arquivos no index.html
 const CACHE = 'portao-apmg-v' + VERSAO;
 const CORE = ['./', './index.html', './manifest.json', './icon-192.png', './icon-512.png',
   ...['app.css', 'js/config.js', 'js/util.js', 'js/placas.js', 'js/dados.js', 'js/ocr.js', 'js/importar.js', 'js/viaturas.js', 'js/posto.js', 'js/relatorios.js', 'js/app.js'].map((f) => './' + f + '?v=' + VERSAO)];

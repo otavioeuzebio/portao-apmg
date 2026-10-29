@@ -38,3 +38,11 @@ test('votação: exige leituras repetidas, menos para placa conhecida', () => {
   v.add([{ p: 'QQQ1A23', c: 0 }], 85, t + 9000);
   assert.equal(v.melhor().p, 'QQQ1A23', 'leituras antigas expiram');
 });
+
+test('placas parecidas: letra e número trocados na 5ª posição', () => {
+  const { placasParecidas } = createRequire(import.meta.url)('../js/placas.js');
+  assert.ok(placasParecidas('BCZ0141').includes('BCZ0I41'));
+  assert.ok(placasParecidas('BCZ0I41').includes('BCZ0141'));
+  assert.ok(placasParecidas('ABC1O23').includes('ABC1023'));
+  assert.deepEqual(placasParecidas('ABC1X23'), []);
+});

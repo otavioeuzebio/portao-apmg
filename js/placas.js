@@ -44,6 +44,14 @@ function altPlate(p) {
   return i >= 0 ? p.slice(0, 4) + i + p.slice(5) : '';
 }
 
+/** Letra↔número que se confundem na 5ª posição (a única que aceita os dois): I/1, O/0, B/8, S/5… */
+const PL_PARECIDOS = { I: ['1'], L: ['1'], O: ['0'], Q: ['0'], D: ['0'], U: ['0'], B: ['8'], S: ['5'], Z: ['2'], G: ['6'], T: ['7'], A: ['4'],
+  '1': ['I', 'L'], '0': ['O', 'Q', 'D'], '8': ['B'], '5': ['S'], '2': ['Z'], '6': ['G'], '7': ['T'], '4': ['A'] };
+/** Placas que podem ser a mesma, digitadas com letra no lugar de número (ou o contrário) na 5ª posição. */
+function placasParecidas(p) {
+  if (!validPlate(p)) return [];
+  return (PL_PARECIDOS[p[4]] || []).map((c) => p.slice(0, 4) + c + p.slice(5)).filter(validPlate);
+}
 /** Quantos caracteres diferem (placas de 7). */
 function plateDist(a, b) {
   if (a.length !== b.length) return 99;
@@ -84,4 +92,4 @@ class VotacaoPlacas {
   }
 }
 
-if (typeof module !== 'undefined') module.exports = { normPlate, validPlate, fixWin, extractPlates, altPlate, plateDist, VotacaoPlacas };
+if (typeof module !== 'undefined') module.exports = { normPlate, validPlate, fixWin, extractPlates, altPlate, plateDist, placasParecidas, VotacaoPlacas };

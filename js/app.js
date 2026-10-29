@@ -22,6 +22,11 @@ const ehAdminNuvem = () => naNuvem() && Dados.papel === 'admin';
 
 /* ---------- consultas ---------- */
 const findVehicle = (p) => Dados.V.get(p) || Dados.V.get(altPlate(p)) || null;
+/** Cadastro com letra/número trocado na 5ª posição (ex.: cadastrado BCZ0I41, lido BCZ0141). */
+function findParecido(p) {
+  for (const q of placasParecidas(p)) { const v = Dados.V.get(q) || Dados.V.get(altPlate(q)); if (v) return v; }
+  return null;
+}
 function alertaDe(p) {
   const a = Dados.A.get(p) || Dados.A.get(altPlate(p));
   if (!a || a.ativo === false) return null;
@@ -44,12 +49,14 @@ function agJanela(g, now = Date.now()) {
 const agendadosHoje = () => [...Dados.G.values()].filter((g) => agJanela(g) !== null).sort((a, b) => (horaMin(a.horaIni) ?? 0) - (horaMin(b.horaIni) ?? 0));
 function agendadoVeiculo(p) { const alt = altPlate(p); return agendadosHoje().find((g) => g.placa && (g.placa === p || g.placa === alt)) || null; }
 function agendadoPessoa(doc, nome) { const d = normDoc(doc), n = norm(nome); return agendadosHoje().find((g) => (d && normDoc(g.documento) === d) || (n && norm(g.nome) === n)) || null; }
-window.placaConhecida = (p) => !!(findVehicle(p) || alertaDe(p) || agendadoVeiculo(p) || viaturaPorPlaca(p));
+window.placaConhecida = (p) => !!(findVehicle(p) || findParecido(p) || alertaDe(p) || agendadoVeiculo(p) || viaturaPorPlaca(p));
 function avaliar(p) {
-  const v = findVehicle(p), al = alertaDe(p), ag = v ? null : agendadoVeiculo(p), key = v ? v.placa : p;
+  let v = findVehicle(p), aprox = false;
+  if (!v) { v = findParecido(p); aprox = !!v; }
+  const al = alertaDe(p) || (aprox ? alertaDe(v.placa) : null), ag = v ? null : agendadoVeiculo(p), key = v ? v.placa : p;
   let st = 'nao';
   if (v) st = statusOf(v); else if (ag) st = agJanela(ag) === 'agora' ? 'agend' : 'agendfora';
-  return { v, al, ag, st, key };
+  return { v, al, ag, st, key, aprox };
 }
 const ST = { vtrext: ['info', 'VTR externa'], oc: ['warn', 'Ocorrência'], ronda: ['ok', 'Ronda'], ok: ['ok', 'Autorizado'], bloq: ['bad', 'Bloqueado'], venc: ['warn', 'Vencido'], nao: ['warn', 'Não cadastrado'], agend: ['info', 'Agendado'], agendfora: ['warn', 'Fora do horário'], pessoa: ['info', 'Pedestre'],
   app: ['info', 'Uber / app'], entrega: ['info', 'Entrega'], vtr: ['ok', 'Viatura'] };
@@ -121,9 +128,10 @@ function checarPermanencia() {
 window.onPlacaLida = (p, recorte, origem) => { const vt = viaturaPorPlaca(p); if (vt && !alertaDe(p)) abrirViatura(vt.id, recorte); else showResult(p, origem, recorte); };
 function showResult(raw, origem = 'manual', recorte = null) {
   const p = normPlate(raw); if (!validPlate(p)) { toast('Placa inválida. Use o formato ABC1D23 ou ABC1234.'); return; }
-  const { v, al, ag, st, key } = avaliar(p), dentro = isInside(key);
+  const { v, al, ag, st, key, aprox } = avaliar(p), dentro = isInside(key);
   let cls = ST[st][0];
-  const head = { ok: 'Acesso autorizado', bloq: 'Bloqueado — não liberar', venc: 'Cadastro vencido', nao: 'Não cadastrado', agend: 'Visita agendada', agendfora: 'Agendado — fora do horário' }[st];
+  if (aprox && cls === 'ok') cls = 'warn'; // placa parecida: pede conferência antes de liberar
+  const head = aprox && st === 'ok' ? 'Confira a placa' : { ok: 'Acesso autorizado', bloq: 'Bloqueado — não liberar', venc: 'Cadastro vencido', nao: 'Não cadastrado', agend: 'Visita agendada', agendfora: 'Agendado — fora do horário' }[st];
   const sub = {
     ok: dentro ? 'Veículo consta como dentro da unidade.' : 'Veículo cadastrado.',
     bloq: 'Retenha o veículo e comunique o Oficial de Dia.',
@@ -132,7 +140,9 @@ function showResult(raw, origem = 'manual', recorte = null) {
     agend: ag ? `Autorizado ${ag.horaIni ? 'das ' + ag.horaIni : ''}${ag.horaFim ? ' às ' + ag.horaFim : ''}${ag.autorizadoPor ? ' por ' + ag.autorizadoPor : ''}.` : '',
     agendfora: ag ? `O agendamento é ${ag.horaIni ? 'das ' + ag.horaIni : ''}${ag.horaFim ? ' às ' + ag.horaFim : ''}. Confirme com o Oficial de Dia.` : '',
   }[st];
-  const alt = v && v.placa !== p ? `<p>Lida como ${esc(p)} (mesma placa no padrão ${/\d/.test(p[4]) ? 'antigo' : 'Mercosul'})</p>` : '';
+  const alt = !v || v.placa === p ? '' : aprox
+    ? `<p><b>Atenção:</b> consultada como ${esc(p)}, cadastrada como ${esc(v.placa)} (${esc(p[4])} e ${esc(v.placa[4])} se confundem). Confira a placa do veículo.</p>`
+    : `<p>Lida como ${esc(p)} (mesma placa no padrão ${/\d/.test(p[4]) ? 'antigo' : 'Mercosul'})</p>`;
   let html = '';
   if (al) {
     // alerta discreto: sem som, sem vermelho; a tela não denuncia o alerta para o condutor
@@ -168,7 +178,7 @@ function showResult(raw, origem = 'manual', recorte = null) {
   const corMain = al ? 'primary' : st === 'bloq' ? 'bad' : first === 'entrada' && (st === 'ok' || st === 'agend') ? 'ok' : 'primary';
   html += `<div class="btnrow"><button class="btn big ${corMain}" id="resMain" type="button">Registrar ${first === 'entrada' ? 'entrada' : 'saída'}</button>
     <button class="btn" id="resOther" type="button">Registrar ${first === 'entrada' ? 'saída' : 'entrada'}</button></div>
-    <div class="btnrow">${v ? `<button class="btn" id="resEdit" type="button">Editar cadastro</button>` : `${ag ? '' : `<button class="btn primary" id="resVis" type="button">Visitante rápido</button><button class="btn" id="resApp" type="button">Uber / app</button><button class="btn" id="resEnt" type="button">Entrega</button>`}<button class="btn" id="resCad" type="button">Cadastrar veículo</button>`}<button class="btn ghost" id="resHist" type="button">Histórico desta placa</button></div>`;
+    <div class="btnrow">${aprox && podeGerir() ? `<button class="btn primary" id="resFix" type="button">A placa certa é ${esc(p)}: corrigir cadastro</button>` : ''}${v ? `<button class="btn" id="resEdit" type="button">Editar cadastro</button>` : `${ag ? '' : `<button class="btn primary" id="resVis" type="button">Visitante rápido</button><button class="btn" id="resApp" type="button">Uber / app</button><button class="btn" id="resEnt" type="button">Entrega</button>`}<button class="btn" id="resCad" type="button">Cadastrar veículo</button>`}<button class="btn ghost" id="resHist" type="button">Histórico desta placa</button></div>`;
   openSheet('Consulta de placa', html);
   alertFx(cls === 'disc' ? 'disc' : cls === 'info' ? 'ok' : cls, CFG.som);
   const obs = () => $('#resObs').value.trim();
@@ -193,6 +203,14 @@ function showResult(raw, origem = 'manual', recorte = null) {
     };
     $$('[data-sim]').forEach((b) => (b.onclick = () => { closeSheet(); showResult(b.dataset.sim, origem); }));
   }
+  const fx = $('#resFix');
+  if (fx) fx.onclick = async () => {
+    if (!await needGestor()) return;
+    if (Dados.V.has(p)) { toast('Já existe um cadastro com ' + p + '.'); return; }
+    if (!await ask({ title: 'Corrigir a placa do cadastro?', msg: `${esc(v.placa)} passa a ser ${esc(p)} (${esc(v.nome || '')}).`, ok: 'Corrigir' })) return;
+    await Dados.apagar('veiculos', v.placa); await Dados.salvar('veiculos', { ...v, placa: p, atualizadoEm: Date.now() });
+    toast('Cadastro corrigido para ' + p); closeSheet(); showResult(p, origem);
+  };
   if (CFG.auto && !al && st === 'ok' && first === 'entrada' && origem === 'camera') {
     regVeiculo(key, 'entrada', { origem: 'camera (automático)' }).then(() => { const b = $('#resMain'); if (b) { b.textContent = 'Entrada registrada ✓'; b.disabled = true; } });
   }
