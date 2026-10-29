@@ -93,6 +93,7 @@ const IMP_ALVOS = {
       ['autorizadoPor', 'Autorizado por', ['autorizado por', 'autorizacao', 'autorizante', 'solicitante']],
       ['data', 'Data', ['data', 'dia', 'data inicio', 'inicio']],
       ['dataFim', 'Até a data', ['ate', 'data fim', 'termino', 'data final']],
+      ['dias', 'Dias (frequente: seg a sex)', ['dias', 'dias da semana', 'frequencia', 'recorrencia', 'dias permitidos']],
       ['horario', 'Horário (ex.: 14h às 17h)', ['horario', 'hora', 'periodo', 'turno']],
       ['horaIni', 'Hora de início', ['hora inicio', 'entrada', 'hora entrada', 'das']],
       ['horaFim', 'Hora de fim', ['hora fim', 'saida', 'hora saida', 'ate as']],
@@ -109,11 +110,22 @@ const IMP_ALVOS = {
       const df = parseDate(o.dataFim); if (df && df >= nv.data) nv.dataFim = df;
       const h = parseHorario(o.horario);
       nv.horaIni = fmtHora(o.horaIni) || h.ini || ''; nv.horaFim = fmtHora(o.horaFim) || h.fim || '';
+      const dias = parseDias(o.dias);
+      if (dias.length) { nv.recorrente = true; nv.dias = dias; if (!nv.dataFim) { const d = new Date(diaMs(nv.data)); d.setMonth(d.getMonth() + 3); nv.dataFim = isoOf(d); } }
       return nv;
     },
   },
 };
 
+/** "seg a sex", "seg, qua, sex", "todos" → [1..5] etc. (0 = domingo). */
+function parseDias(txt) {
+  const t = norm(txt); if (!t) return [];
+  if (/todos|diari|todo dia/.test(t)) return [0, 1, 2, 3, 4, 5, 6];
+  const nomes = ['dom', 'seg', 'ter', 'qua', 'qui', 'sex', 'sab'];
+  const achados = [...t.matchAll(/dom|seg|ter|qua|qui|sex|sab/g)].map((m) => nomes.indexOf(m[0]));
+  if (achados.length === 2 && /\s(a|ate|-)\s/.test(t)) { const out = []; for (let d = achados[0]; ; d = (d + 1) % 7) { out.push(d); if (d === achados[1] || out.length > 7) break; } return out; }
+  return [...new Set(achados)];
+}
 function impGuess(alvo, h) {
   const n = norm(h).replace(/[.:º°]/g, '').trim(); if (!n || n.length > 40) return '';
   const C = IMP_ALVOS[alvo].campos;

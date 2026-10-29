@@ -171,7 +171,7 @@ label.f{display:flex;flex-direction:column;gap:5px;font-size:13px;color:var(--mu
 .rtable td.n{text-align:right;font-variant-numeric:tabular-nums}
 
 /* abas */
-.tabs{position:fixed;left:0;right:0;bottom:0;z-index:30;display:grid;grid-template-columns:repeat(5,1fr);
+.tabs{position:fixed;left:0;right:0;bottom:0;z-index:30;display:grid;grid-auto-flow:column;grid-auto-columns:1fr;
   background:var(--surface);border-top:1px solid var(--line);
   padding-bottom:env(safe-area-inset-bottom,0px);padding-left:env(safe-area-inset-left,0px);padding-right:env(safe-area-inset-right,0px)}
 .tab{display:flex;flex-direction:column;align-items:center;gap:3px;padding:9px 2px 8px;border:0;background:none;color:var(--muted);font-size:11px;font-weight:600;cursor:pointer;letter-spacing:.03em;position:relative}
@@ -267,3 +267,25 @@ pre.passagem{white-space:pre-wrap;background:var(--surface);border:1px solid var
 .gmsg{border-radius:10px;padding:10px 12px;font-size:14px;background:color-mix(in srgb,var(--bad) 16%,var(--surface));border:1px solid var(--bad)}
 .gmsg.ok{background:color-mix(in srgb,var(--ok) 16%,var(--surface));border-color:var(--ok)}
 .linkbtn{background:none;border:0;color:var(--accent-text);font-weight:600;cursor:pointer;padding:6px 0;text-align:left}
+
+/* checklist */
+.checks{border:1px solid var(--line);border-radius:10px;padding:8px 12px;margin:0;display:flex;flex-direction:column;gap:2px}
+.checks legend{font-size:13px;color:var(--muted);padding:0 4px}
+.checks .switch{min-height:40px;border-bottom:1px solid var(--line);font-size:14px}
+.checks .switch:last-child{border-bottom:0}
+div.f>span{font-size:13px;color:var(--muted);font-weight:500}
+/* ocupação e painel */
+.meter{height:10px;border-radius:5px;background:var(--surface2);overflow:hidden}
+.meter i{display:block;height:100%;background:var(--ok)}
+.meter.warn i{background:var(--warn)}.meter.bad i{background:var(--bad)}
+.vtr.ext{background:var(--surface2);color:var(--fg);border-left-color:var(--info)}
+.ronda-ok{color:var(--ok)}.ronda-late{color:var(--warn)}
+.qrcam{position:relative;aspect-ratio:1/1;max-width:100%;border-radius:16px;overflow:hidden;background:#05090e}
+.qrcam video{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+.qrcam .alvo{position:absolute;inset:18%;border:3px solid var(--accent);border-radius:14px;box-shadow:0 0 0 999px rgba(0,0,0,.35)}
+.oc-cat{font:700 11px/1 var(--display);letter-spacing:.1em;padding:5px 7px;border-radius:5px;background:color-mix(in srgb,var(--warn) 18%,transparent);color:var(--warn);text-transform:uppercase}
+.painel-sec{display:flex;flex-direction:column;gap:8px}
+.big-n{font:700 44px/1 var(--display);font-variant-numeric:tabular-nums}
+.quick{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.quick .btn{min-height:42px;font-size:13px;padding:0 6px;line-height:1.15}
+.comando #rapidoRow,.comando [data-out],.comando #btnOcorr2,.comando #btnImportar,.comando #btnNovo,.comando #dadosBox{display:none!important}

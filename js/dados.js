@@ -4,22 +4,24 @@
    da guarda veem o mesmo cadastro, lista de alerta, agendados e livro.
    O resto do app só usa Dados.V / A / G / R, Dados.salvar(), Dados.apagar() e Dados.addRegistro(). */
 "use strict";
-const NUVEM = { veiculos: 'portaoVeiculos', registros: 'portaoRegistros', alertas: 'portaoAlertas', agendados: 'portaoAgendados', viaturas: 'portaoViaturas' };
-const CHAVE = { veiculos: 'placa', alertas: 'placa', agendados: 'id', viaturas: 'id' };
+const NUVEM = { veiculos: 'portaoVeiculos', registros: 'portaoRegistros', alertas: 'portaoAlertas', agendados: 'portaoAgendados', viaturas: 'portaoViaturas', pontos: 'portaoPontos' };
+const CHAVE = { veiculos: 'placa', alertas: 'placa', agendados: 'id', viaturas: 'id', pontos: 'id' };
+/** Configuração do posto compartilhada entre os celulares (vagas, ronda). */
+const CONF_PADRAO = { vagasVisitantes: 0, rondaMin: 120 };
 const JANELA_DIAS = 45; // livro carregado em memória (o resto é buscado sob demanda)
 
 const Dados = {
   modo: null, prontoR: false, user: null, papel: '', fb: null, idb: null, online: navigator.onLine, pendente: false,
-  V: new Map(), A: new Map(), G: new Map(), T: new Map(), R: [], geral: false,
+  V: new Map(), A: new Map(), G: new Map(), T: new Map(), P: new Map(), C: { ...CONF_PADRAO }, R: [], geral: false,
   subs: [], unsub: [],
   on(f) { this.subs.push(f); },
   emit(what) { for (const f of this.subs) { try { f(what); } catch (e) { console.error(e); } } },
-  mapa(col) { return { veiculos: this.V, alertas: this.A, agendados: this.G, viaturas: this.T }[col]; },
+  mapa(col) { return { veiculos: this.V, alertas: this.A, agendados: this.G, viaturas: this.T, pontos: this.P }[col]; },
 
   /* ---------- IndexedDB ---------- */
   abrirIDB() {
     return new Promise((res, rej) => {
-      const r = indexedDB.open('portao-apmg', 3);
+      const r = indexedDB.open('portao-apmg', 4);
       r.onupgradeneeded = () => {
         const d = r.result, have = new Set(d.objectStoreNames);
         if (!have.has('veiculos')) d.createObjectStore('veiculos', { keyPath: 'placa' });
@@ -28,6 +30,7 @@ const Dados = {
         if (!have.has('alertas')) d.createObjectStore('alertas', { keyPath: 'placa' });
         if (!have.has('agendados')) d.createObjectStore('agendados', { keyPath: 'id' });
         if (!have.has('viaturas')) d.createObjectStore('viaturas', { keyPath: 'id' });
+        if (!have.has('pontos')) d.createObjectStore('pontos', { keyPath: 'id' });
       };
       r.onsuccess = () => { this.idb = r.result; res(); };
       r.onerror = () => rej(r.error);
@@ -48,8 +51,8 @@ const Dados = {
   cfgSet(v) { return this.idbReq('config', 'readwrite', (st) => st.put({ k: 'cfg', v })); },
   /** Dados que existem neste aparelho (para enviar à nuvem). */
   async contarLocal() {
-    const [v, a, g, t] = await Promise.all([this.idbAll('veiculos'), this.idbAll('alertas'), this.idbAll('agendados'), this.idbAll('viaturas')]);
-    return { veiculos: v.filter((x) => !x.exemplo), alertas: a.filter((x) => !x.exemplo), agendados: g.filter((x) => !x.exemplo), viaturas: t.filter((x) => !x.exemplo) };
+    const [v, a, g, t, p] = await Promise.all([this.idbAll('veiculos'), this.idbAll('alertas'), this.idbAll('agendados'), this.idbAll('viaturas'), this.idbAll('pontos')]);
+    return { veiculos: v.filter((x) => !x.exemplo), alertas: a.filter((x) => !x.exemplo), agendados: g.filter((x) => !x.exemplo), viaturas: t.filter((x) => !x.exemplo), pontos: p.filter((x) => !x.exemplo) };
   },
 
   /* ---------- Firebase ---------- */
@@ -71,8 +74,9 @@ const Dados = {
   /* ---------- início ---------- */
   async iniciarLocal() {
     this.modo = 'local'; this.papel = 'local';
-    const [v, a, g, r, t] = await Promise.all([this.idbAll('veiculos'), this.idbAll('alertas'), this.idbAll('agendados'), this.idbAll('registros'), this.idbAll('viaturas')]);
-    this.T = new Map(t.map((x) => [x.id, x]));
+    const [v, a, g, r, t, pt, cf] = await Promise.all([this.idbAll('veiculos'), this.idbAll('alertas'), this.idbAll('agendados'), this.idbAll('registros'), this.idbAll('viaturas'), this.idbAll('pontos'),
+      this.idbReq('config', 'readonly', (st) => st.get('compartilhada'))]);
+    this.T = new Map(t.map((x) => [x.id, x])); this.P = new Map(pt.map((x) => [x.id, x])); this.C = { ...CONF_PADRAO, ...(cf ? cf.v : {}) };
     this.V = new Map(v.map((x) => [x.placa, x])); this.A = new Map(a.map((x) => [x.placa, x]));
     this.G = new Map(g.map((x) => [x.id, x])); this.R = r; this.prontoR = true;
     this.emit('tudo');
@@ -81,7 +85,7 @@ const Dados = {
     this.modo = 'nuvem'; this.user = user; this.papel = papel;
     const { fs, db } = await this.carregarFB();
     this.unsub.forEach((u) => u()); this.unsub = [];
-    this.V = new Map(); this.A = new Map(); this.G = new Map(); this.T = new Map(); this.R = []; this.prontoR = false;
+    this.V = new Map(); this.A = new Map(); this.G = new Map(); this.T = new Map(); this.P = new Map(); this.C = { ...CONF_PADRAO }; this.R = []; this.prontoR = false;
     const ouvir = (col, mapa, chave) => {
       this.unsub.push(fs.onSnapshot(fs.collection(db, NUVEM[col]), { includeMetadataChanges: true }, (snap) => {
         snap.docChanges().forEach((ch) => {
@@ -92,7 +96,8 @@ const Dados = {
         this.emit(col);
       }, (err) => this.erroNuvem(err)));
     };
-    ouvir('veiculos', this.V, 'placa'); ouvir('alertas', this.A, 'placa'); ouvir('agendados', this.G, 'id'); ouvir('viaturas', this.T, 'id');
+    ouvir('veiculos', this.V, 'placa'); ouvir('alertas', this.A, 'placa'); ouvir('agendados', this.G, 'id'); ouvir('viaturas', this.T, 'id'); ouvir('pontos', this.P, 'id');
+    this.unsub.push(fs.onSnapshot(fs.doc(db, 'portaoConfig', 'posto'), (d) => { this.C = { ...CONF_PADRAO, ...(d.exists() ? d.data() : {}) }; this.emit('config'); }, (err) => this.erroNuvem(err)));
     const desde = Date.now() - JANELA_DIAS * 864e5;
     const reg = new Map();
     this.unsub.push(fs.onSnapshot(fs.query(fs.collection(db, NUVEM.registros), fs.where('ts', '>=', desde)), { includeMetadataChanges: true }, (snap) => {
@@ -144,6 +149,12 @@ const Dados = {
       await this.idbPutMany(col, arr); arr.forEach((o) => this.mapa(col).set(o[k], o));
     }
     this.emit(col);
+  },
+  /** Configuração compartilhada do posto (gestor). */
+  async salvarConf(campos) {
+    this.C = { ...this.C, ...campos }; this.emit('config');
+    if (this.modo === 'nuvem') { const { fs, db } = this.fb; fs.setDoc(fs.doc(db, 'portaoConfig', 'posto'), campos, { merge: true }).catch((e) => this.falhaGravar(e)); }
+    else await this.idbReq('config', 'readwrite', (st) => st.put({ k: 'compartilhada', v: this.C }));
   },
   /** Muda só alguns campos (a sentinela atualiza km e situação da viatura sem poder editar o resto). */
   async atualizar(col, id, campos) {

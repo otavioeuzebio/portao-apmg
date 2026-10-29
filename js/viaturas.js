@@ -3,6 +3,9 @@
 "use strict";
 const TIPOS_VTR = ['Carro', 'Caminhonete', 'Moto', 'Van', 'Micro-ônibus', 'Ônibus', 'Outro'];
 const APPS = ['Uber', '99', 'InDrive', 'Táxi', 'Outro'];
+const ITENS_VTR = ['Rádio HT', 'Cones', 'Extintor', 'Estepe e macaco', 'Triângulo', 'Documento (CRLV)', 'Cartão combustível', 'Limpeza em ordem'];
+const COMBUSTIVEL = ['Reserva', '1/4', '1/2', '3/4', 'Cheio'];
+const itensDe = (t) => (t.itens && t.itens.length ? t.itens : ITENS_VTR);
 const EMPRESAS = ['iFood', 'Rappi', 'Mercado Livre', 'Correios', 'Amazon', 'Shopee', 'Farmácia', 'Outro'];
 
 const idViatura = (prefixo, placa) => normDoc(prefixo) || normPlate(placa);
@@ -39,13 +42,21 @@ function abrirViatura(id, recorte) {
     <p>${esc([t.tipo, t.marca, t.modelo, t.cor].filter(Boolean).join(' '))}${t.kmAtual != null && t.kmAtual !== '' ? ' · último KM ' + fmtKm(t.kmAtual) : ''}</p></div>`;
   if (recorte) html += `<div class="crop"><img src="${recorte}" alt="Recorte da placa lida"><span>Imagem lida pela câmera.</span></div>`;
   if (fora) html += `<div class="setrow"><h3>Saída</h3><dl class="kv" style="margin:0"><dt>Motorista</dt><dd>${esc(t.motoristaAtual || '—')}</dd><dt>Saiu em</dt><dd>${t.foraDesde ? fmtDT(t.foraDesde) + ' (há ' + fmtDur(Date.now() - t.foraDesde) + ')' : '—'}</dd>
-    <dt>KM de saída</dt><dd>${fmtKm(t.kmSaida)}</dd>${t.destinoAtual ? `<dt>Destino</dt><dd>${esc(t.destinoAtual)}</dd>` : ''}</dl></div>`;
+    <dt>KM de saída</dt><dd>${fmtKm(t.kmSaida)}</dd>${t.destinoAtual ? `<dt>Destino</dt><dd>${esc(t.destinoAtual)}</dd>` : ''}
+    ${t.combSaida ? `<dt>Combustível</dt><dd>${esc(t.combSaida)}</dd>` : ''}${(t.faltandoSaida || []).length ? `<dt>Já faltava</dt><dd>${esc(t.faltandoSaida.join(', '))}</dd>` : ''}</dl></div>`;
+  else if (t.ultimoCheck) html += `<p class="count">Último retorno: combustível ${esc(t.ultimoCheck.combustivel || '—')}${(t.ultimoCheck.faltando || []).length ? ' · faltando ' + esc(t.ultimoCheck.faltando.join(', ')) : ''}${t.ultimoCheck.avarias ? ' · avarias: ' + esc(t.ultimoCheck.avarias) : ''}</p>`;
   html += `<datalist id="dlMot">${mots.map((m) => `<option value="${esc(m.nome)}"></option>`).join('')}</datalist>
     <form class="setrow" id="vtrForm" autocomplete="off"><h3>${fora ? 'Registrar retorno' : 'Registrar saída'}</h3>
       <label class="f" for="vMot">Motorista * (posto/graduação e nome)<input id="vMot" list="dlMot" value="${esc(fora ? t.motoristaAtual || '' : '')}" placeholder="Ex.: Sd. Fulano"></label>
       ${fora ? '' : `<label class="f" for="vDoc">RG / matrícula do motorista<input id="vDoc"></label>`}
       <label class="f" for="vKm">${fora ? 'KM final *' : 'KM inicial *'}<input id="vKm" inputmode="numeric" value="${fora ? '' : esc(t.kmAtual ?? '')}" placeholder="Odômetro" style="font:600 24px var(--display);letter-spacing:.06em"></label>
       ${fora ? '' : `<label class="f" for="vDest">Destino / missão<input id="vDest" placeholder="Ex.: Escolta — 13º BPM"></label>`}
+      <div class="f"><span>Combustível *</span>${chipsHTML('vComb', COMBUSTIVEL, '')}</div>
+      <fieldset class="checks"><legend>Itens da viatura (desmarque o que estiver faltando)</legend>
+        ${itensDe(t).map((it, i) => `<label class="switch" for="vIt${i}">${esc(it)}<input type="checkbox" id="vIt${i}" data-item="${esc(it)}" ${(fora ? !(t.faltandoSaida || []).includes(it) : !((t.ultimoCheck && t.ultimoCheck.faltando) || []).includes(it)) ? 'checked' : ''}></label>`).join('')}
+      </fieldset>
+      <label class="f" for="vAvar">Avarias / alterações<input id="vAvar" placeholder="Ex.: risco na porta traseira direita"></label>
+      <div class="btnrow"><label class="btn sm" for="vFoto">Foto da avaria (até 2)</label><input type="file" id="vFoto" accept="image/*" capture="environment" hidden><span class="count" id="vFotoN"></span></div>
       <label class="f" for="vObs">Observação<input id="vObs" placeholder="${fora ? 'Ex.: avaria no retrovisor, abastecida' : 'Ex.: com 3 cadetes'}"></label>
       <p class="count" id="vKmInfo"></p>
       <button class="btn ${fora ? 'ok' : 'primary'} big" type="submit">${fora ? 'Registrar retorno' : 'Registrar saída'}</button>
@@ -58,6 +69,14 @@ function abrirViatura(id, recorte) {
     $('#vKmInfo').textContent = fora && !isNaN(km) && t.kmSaida != null ? (km >= t.kmSaida ? `Percurso: ${fmtKm(km - t.kmSaida)} km` : 'KM final menor que o de saída') : '';
   };
   $('#vKm').oninput = info;
+  let comb = '', fotos = [];
+  ligarChips('vComb', (v) => { comb = v; });
+  $('#vFoto').onchange = async (e) => {
+    const f = e.target.files[0]; e.target.value = ''; if (!f) return;
+    if (fotos.length >= 2) { toast('Limite de 2 fotos por registro'); return; }
+    const d = await resizeImg(await fileToDataURL(f), 640, .72); if (d) fotos.push(d);
+    $('#vFotoN').textContent = fotos.length + (fotos.length === 1 ? ' foto' : ' fotos');
+  };
   $('#vHist').onclick = () => showHistory('VTR:' + id);
   const ed = $('#vEdit'); if (ed) ed.onclick = async () => { if (await needGestor()) editViatura(id); };
   $('#vtrForm').onsubmit = async (e) => {
@@ -65,7 +84,13 @@ function abrirViatura(id, recorte) {
     const mot = $('#vMot').value.trim(), km = parseKm($('#vKm').value), obs = $('#vObs').value.trim();
     if (!mot) { toast('Informe o motorista'); $('#vMot').focus(); return; }
     if (isNaN(km)) { toast(fora ? 'Informe o KM final' : 'Informe o KM inicial'); $('#vKm').focus(); return; }
-    const base = { kind: 'viatura', chave: 'VTR:' + id, placa: t.placa || '', prefixo: t.prefixo || '', viaturaId: id, nome: mot, motorista: mot, resultado: 'vtr', km, obs,
+    if (!comb) { toast('Marque o nível de combustível'); return; }
+    const faltando = $$('#vtrForm [data-item]').filter((c) => !c.checked).map((c) => c.dataset.item);
+    const avarias = $('#vAvar').value.trim();
+    // no retorno: o que saiu com a viatura e voltou faltando
+    const sumiu = fora ? faltando.filter((it) => !(t.faltandoSaida || []).includes(it)) : [];
+    const check = { combustivel: comb, faltando, avarias, fotos: fotos.length ? fotos : undefined };
+    const base = { ...check, kind: 'viatura', chave: 'VTR:' + id, placa: t.placa || '', prefixo: t.prefixo || '', viaturaId: id, nome: mot, motorista: mot, resultado: 'vtr', km, obs,
       veiculo: [t.marca, t.modelo].filter(Boolean).join(' '), origem: recorte ? 'camera' : 'viatura' };
     try {
       if (!fora) {
@@ -74,14 +99,17 @@ function abrirViatura(id, recorte) {
         if (!isNaN(ult) && km - ult > 3000 && !await ask({ title: 'KM muito acima do último', msg: `Último registrado: ${fmtKm(ult)}. Confirma ${fmtKm(km)}?`, ok: 'Confirmar' })) return;
         const dest = $('#vDest').value.trim();
         await registrar({ ...base, tipo: 'saida', documento: $('#vDoc').value.trim(), destino: dest });
-        await Dados.atualizar('viaturas', id, { fora: true, foraDesde: Date.now(), motoristaAtual: mot, destinoAtual: dest, kmSaida: km, kmAtual: km, atualizadoEm: Date.now() });
+        await Dados.atualizar('viaturas', id, { fora: true, foraDesde: Date.now(), motoristaAtual: mot, destinoAtual: dest, kmSaida: km, kmAtual: km, combSaida: comb, faltandoSaida: faltando, atualizadoEm: Date.now() });
       } else {
         const ini = parseKm(t.kmSaida);
         if (!isNaN(ini) && km < ini) { toast(`O KM final não pode ser menor que o de saída (${fmtKm(ini)}).`, 4500); return; }
         if (!isNaN(ini) && km - ini > 2000 && !await ask({ title: 'Percurso muito longo', msg: `${fmtKm(km - ini)} km desde a saída. Confirma o KM final ${fmtKm(km)}?`, ok: 'Confirmar' })) return;
-        await registrar({ ...base, tipo: 'entrada', kmInicial: isNaN(ini) ? null : ini, kmRodados: isNaN(ini) ? null : km - ini, destino: t.destinoAtual || '' });
-        await Dados.atualizar('viaturas', id, { fora: false, foraDesde: null, motoristaAtual: '', destinoAtual: '', kmSaida: null, kmAtual: km, atualizadoEm: Date.now() });
-        if (!isNaN(ini)) toast(`Retorno registrado · ${fmtKm(km - ini)} km rodados`, 4000);
+        if (sumiu.length) base.obs = ['Saiu com e voltou sem: ' + sumiu.join(', '), base.obs].filter(Boolean).join(' — ');
+        await registrar({ ...base, tipo: 'entrada', sumiu: sumiu.length ? sumiu : undefined, combSaida: t.combSaida || undefined, kmInicial: isNaN(ini) ? null : ini, kmRodados: isNaN(ini) ? null : km - ini, destino: t.destinoAtual || '' });
+        await Dados.atualizar('viaturas', id, { fora: false, foraDesde: null, motoristaAtual: '', destinoAtual: '', kmSaida: null, kmAtual: km, combSaida: null, faltandoSaida: [],
+          ultimoCheck: { combustivel: comb, faltando, avarias, em: Date.now() }, atualizadoEm: Date.now() });
+        if (sumiu.length || avarias) alertFx('warn', CFG.som);
+        toast([!isNaN(ini) ? `Retorno registrado · ${fmtKm(km - ini)} km rodados` : 'Retorno registrado', sumiu.length ? 'voltou sem: ' + sumiu.join(', ') : ''].filter(Boolean).join(' · '), sumiu.length ? 7000 : 4000);
       }
       closeSheet();
     } catch (err) { /* sem sentinela informado */ }
@@ -109,6 +137,7 @@ function editViatura(id) {
       <label class="f" for="etAtivo">Situação<select id="etAtivo"><option value="1" ${t.ativo !== false ? 'selected' : ''}>Em uso</option><option value="0" ${t.ativo === false ? 'selected' : ''}>Baixada / fora de uso</option></select></label></div>
     <div class="grid2"><label class="f" for="etMarca">Marca<input id="etMarca" value="${esc(t.marca || '')}"></label><label class="f" for="etModelo">Modelo<input id="etModelo" value="${esc(t.modelo || '')}"></label></div>
     <div class="grid2"><label class="f" for="etCor">Cor / caracterização<input id="etCor" value="${esc(t.cor || '')}" placeholder="Ex.: caracterizada"></label><label class="f" for="etKm">KM atual<input id="etKm" inputmode="numeric" value="${esc(t.kmAtual ?? '')}"></label></div>
+    <label class="f" for="etItens">Itens do checklist (um por linha)<textarea id="etItens" rows="5">${esc(itensDe(t).join('\n'))}</textarea></label>
     <label class="f" for="etObs">Observações<textarea id="etObs">${esc(t.obs || '')}</textarea></label>
     <button class="btn primary big" id="etSave" type="button">Salvar</button>
     ${id ? '<button class="btn bad" id="etDel" type="button">Excluir viatura</button>' : ''}`);
@@ -120,7 +149,7 @@ function editViatura(id) {
     if (nid !== id && Dados.T.has(nid)) { toast('Já existe uma viatura com este prefixo/placa.'); return; }
     const km = parseKm($('#etKm').value);
     const nv = { ...t, id: nid, prefixo: pref, placa, tipo: $('#etTipo').value, ativo: $('#etAtivo').value === '1', marca: $('#etMarca').value.trim(), modelo: $('#etModelo').value.trim(),
-      cor: $('#etCor').value.trim(), kmAtual: isNaN(km) ? (t.kmAtual ?? null) : km, obs: $('#etObs').value.trim(), atualizadoEm: Date.now() };
+      cor: $('#etCor').value.trim(), kmAtual: isNaN(km) ? (t.kmAtual ?? null) : km, obs: $('#etObs').value.trim(), itens: $('#etItens').value.split('\n').map((x) => x.trim()).filter(Boolean), atualizadoEm: Date.now() };
     if (!nv.criadoEm) nv.criadoEm = Date.now(); delete nv.exemplo;
     if (id && id !== nid) await Dados.apagar('viaturas', id);
     await Dados.salvar('viaturas', nv); closeSheet(); toast(vtrNome(nv) + ' salva');

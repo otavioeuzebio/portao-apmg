@@ -30,9 +30,12 @@ function alertaDe(p) {
 }
 function statusOf(v) { if (!v) return 'nao'; if (v.status === 'bloqueado') return 'bloq'; if (v.validade && v.validade < hojeISO()) return 'venc'; return 'ok'; }
 /** Situação do agendamento agora: null (não é hoje), 'antes', 'agora', 'depois'. */
+const DIAS_SEM = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
 function agJanela(g, now = Date.now()) {
   const hoje = isoOf(new Date(now)), ini = g.data, fim = g.dataFim || g.data;
   if (!ini || hoje < ini || hoje > fim) return null;
+  // visitante frequente: só nos dias da semana marcados
+  if (g.recorrente && (g.dias || []).length && !g.dias.includes(new Date(now).getDay())) return null;
   const d = new Date(now), min = d.getHours() * 60 + d.getMinutes(), hi = horaMin(g.horaIni), hf = horaMin(g.horaFim);
   if (hi != null && min < hi - 30) return 'antes';
   if (hf != null && min > hf) return 'depois';
@@ -48,16 +51,17 @@ function avaliar(p) {
   if (v) st = statusOf(v); else if (ag) st = agJanela(ag) === 'agora' ? 'agend' : 'agendfora';
   return { v, al, ag, st, key };
 }
-const ST = { ok: ['ok', 'Autorizado'], bloq: ['bad', 'Bloqueado'], venc: ['warn', 'Vencido'], nao: ['warn', 'Não cadastrado'], agend: ['info', 'Agendado'], agendfora: ['warn', 'Fora do horário'], pessoa: ['info', 'Pedestre'],
+const ST = { vtrext: ['info', 'VTR externa'], oc: ['warn', 'Ocorrência'], ronda: ['ok', 'Ronda'], ok: ['ok', 'Autorizado'], bloq: ['bad', 'Bloqueado'], venc: ['warn', 'Vencido'], nao: ['warn', 'Não cadastrado'], agend: ['info', 'Agendado'], agendfora: ['warn', 'Fora do horário'], pessoa: ['info', 'Pedestre'],
   app: ['info', 'Uber / app'], entrega: ['info', 'Entrega'], vtr: ['ok', 'Viatura'] };
 const visitante = (r) => r.kind === 'pessoa' || ['nao', 'agend', 'agendfora', 'app', 'entrega'].includes(r.resultado);
+const quem = (r) => (r.prefixo ? 'VTR ' + r.prefixo : r.placa || r.nome || '');
 const rapido = (r) => ['app', 'entrega'].includes(r.resultado);
 function similar(p) { const out = []; for (const k of Dados.V.keys()) if (plateDist(k, p) === 1) out.push(Dados.V.get(k)); return out.slice(0, 3); }
 
 /* ---------- livro ---------- */
 function insideList() {
   const last = new Map();
-  for (const r of Dados.R) { if (r.kind === 'viatura') continue; const k = r.chave || r.placa; const p = last.get(k); if (!p || r.ts > p.ts) last.set(k, r); }
+  for (const r of Dados.R) { if (r.kind === 'viatura' || r.kind === 'ocorrencia' || r.kind === 'ronda') continue; const k = r.chave || r.placa; const p = last.get(k); if (!p || r.ts > p.ts) last.set(k, r); }
   return [...last.values()].filter((r) => r.tipo === 'entrada').sort((a, b) => b.ts - a.ts);
 }
 const isInside = (k) => insideList().some((r) => (r.chave || r.placa) === k);
@@ -68,10 +72,14 @@ async function garantirSentinela() {
   CFG.sentinela = n.trim(); CFG.sentinelaEm = Date.now(); await saveCfg(); renderHeader(); return true;
 }
 async function registrar(rec) {
+  if (Dados.papel === 'comando') { toast('Seu acesso é só de consulta (comando).'); throw new Error('somente leitura'); }
   if (!await garantirSentinela()) throw new Error('sem sentinela');
+  if (!await confirmaVaga(rec)) throw new Error('pátio lotado');
   rec = { ...rec, ts: Date.now(), sentinela: CFG.sentinela || '' };
   await Dados.addRegistro(rec);
-  toast((rec.kind === 'viatura' ? (rec.tipo === 'entrada' ? 'Retorno' : 'Saída') : rec.tipo === 'entrada' ? 'Entrada' : 'Saída') + ' de ' + (rec.prefixo ? 'VTR ' + rec.prefixo : rec.placa || rec.nome) + ' registrada às ' + fmtH(rec.ts));
+  const quem = rec.prefixo ? 'VTR ' + rec.prefixo : rec.placa || rec.nome;
+  toast(rec.kind === 'ocorrencia' ? 'Ocorrência registrada às ' + fmtH(rec.ts) : rec.kind === 'ronda' ? 'Ronda: ' + rec.nome + ' às ' + fmtH(rec.ts)
+    : (rec.kind === 'viatura' ? (rec.tipo === 'entrada' ? 'Retorno' : 'Saída') : rec.tipo === 'entrada' ? 'Entrada' : 'Saída') + ' de ' + quem + ' registrada às ' + fmtH(rec.ts));
 }
 async function regVeiculo(placa, tipo, extra = {}) {
   const av = avaliar(placa), v = av.v, ag = av.ag;
@@ -234,7 +242,7 @@ async function saidaDe(chave) {
 function renderPortao() {
   $$('#portaoSeg button').forEach((b) => b.setAttribute('aria-pressed', b.dataset.m === modoPortao));
   $('#modoVeiculo').hidden = modoPortao !== 'veiculo'; $('#modoPessoa').hidden = modoPortao !== 'pessoa'; $('#modoViatura').hidden = modoPortao !== 'viatura';
-  $('#rapidoRow').hidden = modoPortao === 'viatura';
+  $('#vagasBox').innerHTML = meterHTML();
   if (modoPortao === 'viatura') renderViaturasPortao();
   const ins = insideList().filter((r) => r.kind === 'pessoa');
   $('#pesInside').innerHTML = ins.length ? ins.map(pessoaItem).join('') : '<li class="empty">Nenhum pedestre dentro da unidade.</li>';
@@ -251,12 +259,17 @@ function renderPortao() {
 }
 $('#portaoSeg').onclick = (e) => { const b = e.target.closest('button'); if (!b) return; modoPortao = b.dataset.m; if (modoPortao !== 'veiculo' && Cam.stream) Cam.stop(); renderPortao(); };
 $('#btnApp').onclick = () => abrirRapido('app');
+$('#btnVtrExt').onclick = () => abrirVtrExterna();
+$('#btnRonda').onclick = () => abrirRonda();
+$('#btnOcorr').onclick = () => abrirOcorrencia();
+$('#btnPainel').onclick = () => go('painel');
+$('#rondaBanner').onclick = () => abrirRonda();
 $('#btnEnt').onclick = () => abrirRapido('entrega');
 $('#vtrBusca').onsubmit = (e) => {
   e.preventDefault(); const q = $('#vtrIn').value.trim(); if (!q) return;
   const t = viaturaPorTexto(q);
   if (t) { $('#vtrIn').value = ''; $('#vtrIn').blur(); abrirViatura(t.id); }
-  else toast(podeGerir() ? 'Viatura não cadastrada. Cadastre em Cadastro → Viaturas.' : 'Viatura não cadastrada. Peça a um gestor para cadastrar.', 4000);
+  else { $('#vtrIn').value = ''; consultarTexto(q); } // prefixo de outra unidade: registra pelo prefixo
 };
 $('#btnCam').onclick = () => Cam.start();
 $('#btnStop').onclick = () => Cam.stop();
@@ -264,7 +277,7 @@ $('#btnTorch').onclick = () => Cam.setTorch();
 $('#zoomIn').oninput = (e) => Cam.setZoom(e.target.value);
 $('#camStatus').onclick = () => Cam.tocarStatus();
 $('#photoIn').onchange = (e) => { Cam.lerFoto(e.target.files[0]); e.target.value = ''; };
-$('#manualForm').onsubmit = (e) => { e.preventDefault(); const p = normPlate($('#manualIn').value); if (!validPlate(p)) { toast('Placa inválida. Use ABC1D23 ou ABC1234.'); return; } $('#manualIn').value = ''; $('#manualIn').blur(); showResult(p, 'digitada'); };
+$('#manualForm').onsubmit = (e) => { e.preventDefault(); const v = $('#manualIn').value.trim(); if (!v) return; $('#manualIn').value = ''; $('#manualIn').blur(); consultarTexto(v); };
 $('#manualIn').oninput = (e) => { const c = e.target.selectionStart; e.target.value = e.target.value.toUpperCase(); try { e.target.setSelectionRange(c, c); } catch (_) { /* campo sem cursor */ } };
 $('#pesForm').onsubmit = pessoaEntrada;
 $('#pesDoc').onchange = pesHint; $('#pesNome').onchange = pesHint;
@@ -292,7 +305,7 @@ function irCadastro(sub) { cadSub = sub; cadFilter = 'todos'; go('cadastro'); }
 const CAD_FILTROS = {
   veiculos: [['todos', 'Todos'], ['ok', 'Ativos'], ['bloq', 'Bloqueados'], ['venc', 'Vencidos'], ['visit', 'Visitantes'], ['semfoto', 'Sem foto']],
   viaturas: [['todos', 'Todas'], ['fora', 'Fora'], ['dentro', 'Na unidade'], ['baixadas', 'Baixadas']],
-  agendados: [['todos', 'Próximos'], ['hoje', 'Hoje'], ['antigos', 'Encerrados']],
+  agendados: [['todos', 'Próximos'], ['hoje', 'Hoje'], ['freq', 'Frequentes'], ['antigos', 'Encerrados']],
   alertas: [['todos', 'Ativos'], ['inativos', 'Vencidos / inativos']],
 };
 function renderCadastro() {
@@ -313,7 +326,7 @@ function renderCadastro() {
       return !q || norm([v.placa, v.nome, v.postoGrad, v.marca, v.modelo, v.cor, v.setor, v.vinculo].join(' ')).includes(q) || (qp && v.placa.includes(qp));
     }).sort((a, b) => (a.nome || '').localeCompare(b.nome || '', 'pt-BR'));
     n = arr.length;
-    if ([Dados.V, Dados.T, Dados.G, Dados.A].some((m) => [...m.values()].some((v) => v.exemplo))) { note.hidden = false; note.innerHTML = 'Há <b>cadastros de exemplo</b> para você testar. <button class="btn sm" id="btnDelEx" type="button">Apagar exemplos</button>'; }
+    if ([Dados.V, Dados.T, Dados.G, Dados.A, Dados.P].some((m) => [...m.values()].some((v) => v.exemplo))) { note.hidden = false; note.innerHTML = 'Há <b>cadastros de exemplo</b> para você testar. <button class="btn sm" id="btnDelEx" type="button">Apagar exemplos</button>'; }
     html = arr.map((v) => { const [c, l] = ST[statusOf(v)]; return `<li class="vitem" data-p="${esc(v.placa)}" tabindex="0"><img src="${avatar(v)}" alt="" loading="lazy"><div class="vinfo"><div class="vtop">${plateHTML(v.placa, 'sm')}<span class="pill ${c}">${l}</span>${alertaDe(v.placa) ? '<span class="pill disc">Alerta</span>' : ''}${v.exemplo ? '<span class="pill mut">Exemplo</span>' : ''}</div><b>${esc((v.postoGrad ? v.postoGrad + ' ' : '') + (v.nome || 'Sem nome'))}</b><small>${esc([v.vinculo, [v.marca, v.modelo].filter(Boolean).join(' '), v.cor].filter(Boolean).join(' · '))}</small></div></li>`; }).join('');
   } else if (cadSub === 'viaturas') {
     let arr = [...Dados.T.values()]; total = arr.length;
@@ -330,14 +343,15 @@ function renderCadastro() {
     let arr = [...Dados.G.values()]; total = arr.length;
     arr = arr.filter((g) => {
       const fim = g.dataFim || g.data;
-      if (cadFilter === 'todos' && fim < hoje) return false; if (cadFilter === 'hoje' && agJanela(g) === null) return false; if (cadFilter === 'antigos' && fim >= hoje) return false;
+      if (cadFilter === 'todos' && fim < hoje) return false; if (cadFilter === 'hoje' && agJanela(g) === null) return false; if (cadFilter === 'freq' && (!g.recorrente || fim < hoje)) return false; if (cadFilter === 'antigos' && fim >= hoje) return false;
       return !q || norm([g.nome, g.documento, g.placa, g.destino, g.autorizadoPor, g.veiculo].join(' ')).includes(q) || (qp && (g.placa || '').includes(qp));
     }).sort((a, b) => (cadFilter === 'antigos' ? -1 : 1) * ((a.data + (a.horaIni || '')).localeCompare(b.data + (b.horaIni || ''))));
     n = arr.length;
     if (!total) { note.hidden = false; note.innerHTML = 'Cadastre aqui visitas, prestadores e entregas com dia e horário. Eles aparecem em <b>Esperados hoje</b> e são reconhecidos na leitura da placa ou na entrada de pedestre.'; }
     html = arr.map((g) => {
       const jan = agJanela(g), fim = g.dataFim || g.data;
-      const pill = jan ? '<span class="pill info">Hoje</span>' : fim < hoje ? '<span class="pill mut">Encerrado</span>' : '<span class="pill ok">Agendado</span>';
+      const pill = (g.recorrente && fim >= hoje ? `<span class="pill ok">Frequente · ${esc((g.dias || []).map((d) => DIAS_SEM[d]).join(' ') || 'todo dia')}</span>` : '')
+        + (jan ? '<span class="pill info">Hoje</span>' : fim < hoje ? '<span class="pill mut">Encerrado</span>' : g.recorrente ? '' : '<span class="pill ok">Agendado</span>');
       return `<li class="vitem" data-g="${esc(g.id)}" tabindex="0"><div class="vinfo"><div class="vtop">${g.placa ? plateHTML(g.placa, 'sm') : '<span class="ped">PEDESTRE</span>'}${pill}</div><b>${esc(g.nome || 'Sem nome')}</b><small>${esc([fmtD(g.data) + (g.dataFim ? ' a ' + fmtD(g.dataFim) : ''), [g.horaIni, g.horaFim].filter(Boolean).join('–'), g.destino].filter(Boolean).join(' · '))}</small></div></li>`;
     }).join('');
   } else {
@@ -354,7 +368,7 @@ function renderCadastro() {
   }
   $('#cadCount').textContent = `${n} de ${total}`;
   $('#cadList').innerHTML = html || '<li class="empty">Nada encontrado.</li>';
-  const de = $('#btnDelEx'); if (de) de.onclick = async () => { if (!await needGestor()) return; for (const [col, k] of [['veiculos', 'placa'], ['viaturas', 'id'], ['agendados', 'id'], ['alertas', 'placa']]) await Dados.apagarVarios(col, [...Dados.mapa(col).values()].filter((v) => v.exemplo).map((v) => v[k])); toast('Exemplos apagados'); };
+  const de = $('#btnDelEx'); if (de) de.onclick = async () => { if (!await needGestor()) return; for (const [col, k] of [['veiculos', 'placa'], ['viaturas', 'id'], ['agendados', 'id'], ['alertas', 'placa'], ['pontos', 'id']]) await Dados.apagarVarios(col, [...Dados.mapa(col).values()].filter((v) => v.exemplo).map((v) => v[k])); toast('Exemplos apagados'); };
 }
 $('#cadSeg').onclick = (e) => { const b = e.target.closest('button'); if (!b) return; cadSub = b.dataset.c; cadFilter = 'todos'; $('#cadSearch').value = ''; renderCadastro(); };
 $('#cadSearch').oninput = renderCadastro;
@@ -424,17 +438,22 @@ function editAgendado(id) {
     <div class="grid2"><label class="f" for="agPlaca">Placa (se vier de carro)<input id="agPlaca" value="${esc(g.placa || '')}" maxlength="8" autocapitalize="characters" style="text-transform:uppercase"></label><label class="f" for="agVeic">Veículo e cor<input id="agVeic" value="${esc([g.veiculo, g.cor].filter(Boolean).join(' '))}" placeholder="Ex.: Fiat Strada branca"></label></div>
     <label class="f" for="agDest">Destino / motivo<input id="agDest" value="${esc(g.destino || '')}" placeholder="Ex.: Seção de Logística — manutenção"></label>
     <label class="f" for="agAut">Autorizado por<input id="agAut" value="${esc(g.autorizadoPor || '')}" placeholder="Ex.: Cap. Fulano — Of. de Dia"></label>
+    <label class="switch" for="agRec">Visitante frequente (repete nos dias da semana marcados) <input type="checkbox" id="agRec" ${g.recorrente ? 'checked' : ''}></label>
+    <div id="agDiasBox" ${g.recorrente ? '' : 'hidden'}><div class="f"><span>Dias permitidos</span><div class="chips" id="agDias">${[1, 2, 3, 4, 5, 6, 0].map((d) => `<button class="chip" type="button" data-d="${d}" aria-pressed="${(g.dias || [1, 2, 3, 4, 5]).includes(d)}">${DIAS_SEM[d]}</button>`).join('')}</div></div></div>
     <div class="grid2"><label class="f" for="agData">Data *<input type="date" id="agData" value="${esc(g.data || '')}"></label><label class="f" for="agDataFim">Até a data (vários dias)<input type="date" id="agDataFim" value="${esc(g.dataFim || '')}"></label></div>
     <div class="grid2"><label class="f" for="agIni">Hora de início<input type="time" id="agIni" value="${esc(g.horaIni || '')}"></label><label class="f" for="agFim">Hora de fim<input type="time" id="agFim" value="${esc(g.horaFim || '')}"></label></div>
     <label class="f" for="agObs">Observações<textarea id="agObs">${esc(g.obs || '')}</textarea></label>
     <button class="btn primary big" id="agSave" type="button">Salvar</button>
     ${id ? '<button class="btn bad" id="agDel" type="button">Excluir agendamento</button>' : ''}`);
+  $('#agRec').onchange = (e) => { $('#agDiasBox').hidden = !e.target.checked; if (e.target.checked && !$('#agDataFim').value) { const d = new Date(); d.setMonth(d.getMonth() + 3); $('#agDataFim').value = isoOf(d); } };
+  $('#agDias').onclick = (e) => { const b = e.target.closest('.chip'); if (b) b.setAttribute('aria-pressed', b.getAttribute('aria-pressed') !== 'true'); };
   $('#agSave').onclick = async () => {
     const nome = $('#agNome').value.trim(), placa = normPlate($('#agPlaca').value), data = $('#agData').value;
     if (!nome) { toast('Informe o nome'); return; } if (!data) { toast('Informe a data'); return; }
     if (placa && !validPlate(placa)) { toast('Placa inválida'); return; }
     const fim = $('#agDataFim').value;
     const nv = { ...g, nome, documento: $('#agDoc').value.trim(), placa: placa || '', veiculo: $('#agVeic').value.trim(), cor: '', destino: $('#agDest').value.trim(), autorizadoPor: $('#agAut').value.trim(),
+      recorrente: $('#agRec').checked, dias: $('#agRec').checked ? $$('#agDias .chip').filter((c) => c.getAttribute('aria-pressed') === 'true').map((c) => +c.dataset.d) : [],
       data, dataFim: fim && fim > data ? fim : '', horaIni: $('#agIni').value, horaFim: $('#agFim').value, obs: $('#agObs').value.trim(), atualizadoEm: Date.now() };
     if (!nv.criadoEm) nv.criadoEm = Date.now();
     await Dados.salvar('agendados', nv); closeSheet(); toast('Agendamento salvo');
@@ -467,15 +486,21 @@ function editAlerta(placa) {
 /* ---------- LIVRO ---------- */
 function logItem(r, showDate) {
   const [c, l] = ST[r.resultado] || ST.ok;
-  const ident = r.kind === 'viatura' ? `<span class="vtr">${esc(r.prefixo || 'VTR')}</span>${r.placa ? plateHTML(r.placa, 'sm') : ''}` : r.kind === 'pessoa' ? '<span class="ped">' + (r.resultado === 'entrega' ? 'ENTREGA' : 'PEDESTRE') + '</span>' : plateHTML(r.placa, 'sm');
-  const pill = r.alerta ? '<span class="pill disc">Alerta</span>' : !['ok', 'pessoa', 'vtr'].includes(r.resultado) ? `<span class="pill ${c}">${r.empresa ? esc(r.empresa) : l}</span>` : '<span></span>';
-  const det = r.kind === 'viatura' ? ['KM ' + fmtKm(r.km) + (r.kmRodados != null ? ' (' + fmtKm(r.kmRodados) + ' km)' : ''), r.destino]
+  const ident = r.kind === 'ocorrencia' ? `<span class="oc-cat">${esc(r.categoria || 'Ocorrência')}</span>` : r.kind === 'ronda' ? '<span class="ped">RONDA</span>'
+    : r.resultado === 'vtrext' ? `<span class="vtr ext">${esc(r.prefixo || 'VTR')}</span>${r.placa ? plateHTML(r.placa, 'sm') : ''}`
+    : r.kind === 'viatura' ? `<span class="vtr">${esc(r.prefixo || 'VTR')}</span>${r.placa ? plateHTML(r.placa, 'sm') : ''}` : r.kind === 'pessoa' ? '<span class="ped">' + (r.resultado === 'entrega' ? 'ENTREGA' : 'PEDESTRE') + '</span>' : plateHTML(r.placa, 'sm');
+  const pill = r.alerta ? '<span class="pill disc">Alerta</span>' : (r.fotos || []).length ? '<span class="pill mut">Foto</span>' : !['ok', 'pessoa', 'vtr', 'oc', 'ronda'].includes(r.resultado) ? `<span class="pill ${c}">${r.empresa ? esc(r.empresa) : l}</span>` : '<span></span>';
+  const det = r.kind === 'ocorrencia' ? [] : r.kind === 'ronda' ? [r.origem === 'manual' ? 'registrada sem QR' : 'QR Code']
+    : r.kind === 'viatura' ? ['KM ' + fmtKm(r.km) + (r.kmRodados != null ? ' (' + fmtKm(r.kmRodados) + ' km)' : ''), r.combustivel ? 'comb. ' + r.combustivel : '', (r.faltando || []).length ? 'faltando ' + r.faltando.length : '', r.destino]
     : [r.kind === 'pessoa' ? r.documento : r.veiculo, r.destino];
   return `<li class="litem" data-k="${esc(r.chave || r.placa)}"><span class="t">${showDate ? fmtDT(r.ts) : fmtH(r.ts)}</span>
-    <div class="who"><div class="vtop">${ident}<span class="tag ${r.tipo === 'entrada' ? 'e' : 's'}">${r.kind === 'viatura' ? (r.tipo === 'entrada' ? 'RETORNO' : 'SAÍDA') : r.tipo === 'entrada' ? 'ENTRADA' : 'SAÍDA'}</span></div><b>${esc(r.nome || 'Não identificado')}</b><small>${esc([...det, r.sentinela ? 'Sent.: ' + r.sentinela : ''].filter(Boolean).join(' · '))}</small></div>
-    ${pill}${r.obs ? `<div class="obs">${esc(r.obs)}</div>` : ''}</li>`;
+    <div class="who"><div class="vtop">${ident}${r.kind === 'ocorrencia' || r.kind === 'ronda' ? '' : `<span class="tag ${r.tipo === 'entrada' ? 'e' : 's'}">${r.kind === 'viatura' ? (r.tipo === 'entrada' ? 'RETORNO' : 'SAÍDA') : r.tipo === 'entrada' ? 'ENTRADA' : 'SAÍDA'}</span>`}</div><b>${esc(r.kind === 'ocorrencia' ? (r.obs || '').split('\n')[0].slice(0, 80) : r.nome || 'Não identificado')}</b><small>${esc([...det, r.sentinela ? 'Sent.: ' + r.sentinela : ''].filter(Boolean).join(' · '))}</small></div>
+    ${pill}${r.obs && r.kind !== 'ocorrencia' ? `<div class="obs">${esc(r.obs)}</div>` : ''}</li>`;
 }
 function abrirRegistro(k) {
+  if (k.startsWith('OC:')) { verOcorrencia(k); return; }
+  if (k.startsWith('RD:')) { showHistory(k); return; }
+  if (k.startsWith('PFX:')) { verVtrExterna(k); return; }
   if (k.startsWith('VTR:')) { if (Dados.T.has(k.slice(4))) abrirViatura(k.slice(4)); else showHistory(k); return; }
   if (!k.startsWith('P:')) { showResult(k, 'livro'); return; }
   const regs = Dados.R.filter((r) => r.chave === k).sort((a, b) => b.ts - a.ts); const r = regs[0]; if (!r) return;
@@ -506,6 +531,7 @@ async function renderLivro() {
   const rows = day.filter((r) => {
     if (livroFiltro === 'veiculo' && !(!r.kind || r.kind === 'veiculo')) return false; if (livroFiltro === 'pessoa' && r.kind !== 'pessoa') return false;
     if (livroFiltro === 'viatura' && r.kind !== 'viatura') return false; if (livroFiltro === 'rapido' && !rapido(r)) return false;
+    if (livroFiltro === 'posto' && r.kind !== 'ocorrencia') return false; if (livroFiltro === 'ronda' && r.kind !== 'ronda') return false;
     if (livroFiltro === 'ocorr' && !(r.alerta || ['bloq', 'venc', 'agendfora', 'nao'].includes(r.resultado))) return false;
     return !q || norm([r.placa, r.prefixo, r.nome, r.documento, r.obs, r.destino, r.empresa].join(' ')).includes(q);
   });
@@ -525,6 +551,8 @@ $('#btnCsv').onclick = async () => {
   download('livro-portao-' + iso + '.csv', '﻿' + lines.join('\r\n'), 'text/csv');
 };
 $('#btnPassagem').onclick = () => passagem(12);
+$('#btnOcorr2').onclick = () => abrirOcorrencia();
+$('#v-painel').addEventListener('click', (e) => { const vt = e.target.closest('[data-vtr]'); if (vt) { abrirViatura(vt.dataset.vtr); return; } const li = e.target.closest('.litem[data-k]'); if (li) abrirRegistro(li.dataset.k); });
 function passagem(h) {
   const now = Date.now(), from = now - h * 36e5; const rows = Dados.R.filter((r) => r.ts >= from).sort((a, b) => a.ts - b.ts); const ins = insideList();
   const ent = rows.filter((r) => r.tipo === 'entrada'), sai = rows.filter((r) => r.tipo === 'saida');
@@ -534,7 +562,9 @@ function passagem(h) {
   const vis = [...new Set(entV.filter(visitante).map((r) => r.placa + (r.nome ? ' (' + r.nome + ')' : '')))];
   const bl = [...new Set(rows.filter((r) => r.resultado === 'bloq').map((r) => r.placa))];
   const al = [...new Set(rows.filter((r) => r.alerta).map((r) => r.placa))];
-  const at = atrasados(); const obs = rows.filter((r) => r.obs);
+  const at = atrasados(); const obs = rows.filter((r) => r.obs && r.kind !== 'ocorrencia');
+  const ocs = rows.filter((r) => r.kind === 'ocorrencia'), rds = rows.filter((r) => r.kind === 'ronda'), rdAt = rondasAtrasadas();
+  const vtrProb = rows.filter((r) => r.kind === 'viatura' && r.tipo === 'entrada' && ((r.sumiu || []).length || r.avarias));
   const pend = agendadosHoje().filter((g) => !Dados.R.some((r) => r.agendadoId === g.id && r.tipo === 'entrada' && r.ts >= diaMs(hojeISO())) && agJanela(g) !== 'depois');
   const L = (arr, f) => (arr.length ? '\n' + arr.map((x) => '  • ' + f(x)).join('\n') : '');
   let t = `PASSAGEM DE SERVIÇO — PORTÃO APMG\n${fmtDT(from)} até ${fmtDT(now)} (últimas ${h} h)\nSentinela: ${CFG.sentinela || 'não informado'}\n\n`;
@@ -545,10 +575,13 @@ function passagem(h) {
   t += `Visitantes / não cadastrados (veículos): ${vis.length}${L(vis, (x) => x)}\n`;
   t += `Alertas de veículo bloqueado: ${bl.length}${L(bl, (x) => x)}\n`;
   if (al.length) t += `Consultas especiais (lista de alerta): ${al.length}${L(al, (x) => x)}\n`;
-  t += `\nNo local agora (${ins.length}):${ins.length ? L(ins, (r) => `${r.kind === 'pessoa' ? (r.resultado === 'entrega' ? 'Entrega' + (r.empresa ? ' ' + r.empresa : '') : 'Pedestre') : r.placa} — ${r.nome || 'não identificado'}${r.kind === 'pessoa' ? (r.destino ? ' — ' + r.destino : '') : r.veiculo ? ' — ' + r.veiculo : ''} (entrou ${fmtDT(r.ts)})`) : '\n  ninguém'}\n`;
+  t += `\nNo local agora (${ins.length}):${ins.length ? L(ins, (r) => `${r.kind === 'pessoa' ? (r.resultado === 'entrega' ? 'Entrega' + (r.empresa ? ' ' + r.empresa : '') : 'Pedestre') : quem(r)} — ${r.nome || 'não identificado'}${r.kind === 'pessoa' ? (r.destino ? ' — ' + r.destino : '') : r.veiculo ? ' — ' + r.veiculo : ''} (entrou ${fmtDT(r.ts)})`) : '\n  ninguém'}\n`;
   if (at.length) t += `\nPermanência vencida:${L(at, (x) => `${x.r.placa || x.r.nome} — passou ${fmtDur(x.exc)} do ${x.mot}`)}\n`;
   if (pend.length) t += `\nAgendados que ainda não chegaram:${L(pend, (g) => `${g.nome}${g.placa ? ' (' + g.placa + ')' : ''} — ${[g.horaIni, g.horaFim].filter(Boolean).join(' às ') || 'dia todo'}${g.destino ? ' — ' + g.destino : ''}`)}\n`;
-  if (obs.length) t += `\nObservações:${L(obs, (r) => `${fmtH(r.ts)} ${r.placa || r.nome}: ${r.obs}`)}\n`;
+  if (ocs.length) t += `\nOcorrências do posto (${ocs.length}):${L(ocs, (r) => `${fmtH(r.ts)} [${r.categoria}] ${r.obs}`)}\n`;
+  if (pontosAtivos().length) t += `\nRondas: ${rds.length} passagens registradas${rds.filter((r) => r.origem === 'manual').length ? ' (' + rds.filter((r) => r.origem === 'manual').length + ' sem QR)' : ''}${rdAt.length ? '\n  • Pontos atrasados: ' + rdAt.map((x) => x.p.nome).join(', ') : ''}\n`;
+  if (vtrProb.length) t += `\nAlterações em viaturas:${L(vtrProb, (r) => `VTR ${r.prefixo || r.placa}: ${[(r.sumiu || []).length ? 'voltou sem ' + r.sumiu.join(', ') : '', r.avarias].filter(Boolean).join('; ')}`)}\n`;
+  if (obs.length) t += `\nObservações:${L(obs, (r) => `${fmtH(r.ts)} ${quem(r)}: ${r.obs}`)}\n`;
   t += `\nSem outras alterações.`;
   openSheet('Passagem de serviço', `<div class="chips"><button class="chip" type="button" data-h="12" aria-pressed="${h === 12}">Últimas 12 h</button><button class="chip" type="button" data-h="24" aria-pressed="${h === 24}">Últimas 24 h</button></div>
     <pre class="passagem" id="passTxt">${esc(t)}</pre><div class="btnrow"><button class="btn primary" id="passCopy" type="button">Copiar texto</button>${navigator.share ? '<button class="btn" id="passShare" type="button">Enviar (WhatsApp…)</button>' : ''}</div>`);
@@ -570,7 +603,7 @@ function applyTheme() {
   const dark = CFG.theme ? CFG.theme === 'dark' : !matchMedia('(prefers-color-scheme: light)').matches;
   $('meta[name="theme-color"]').content = dark ? '#142130' : '#ffffff';
 }
-const PAPEL_TXT = { admin: 'Administrador', gestor: 'Gestor (edita o cadastro)', sentinela: 'Sentinela (consulta e registra)', local: 'Modo local' };
+const PAPEL_TXT = { comando: 'Comando (painel e relatórios, só consulta)', admin: 'Administrador', gestor: 'Gestor (edita o cadastro)', sentinela: 'Sentinela (consulta e registra)', local: 'Modo local' };
 function renderMais() {
   $('#cfgSent').value = CFG.sentinela || ''; $('#cfgSom').checked = !!CFG.som; $('#cfgAuto').checked = !!CFG.auto; $('#cfgTheme').value = CFG.theme || '';
   $('#cfgLimVis').value = CFG.limVisit; $('#cfgLimGer').value = CFG.limGeral; $('#cfgLimRap').value = CFG.limRapido;
@@ -588,6 +621,7 @@ function renderMais() {
     const bn = $('#btnModoNuvem'); if (bn) bn.onclick = async () => { CFG.modo = 'nuvem'; await saveCfg(); location.reload(); };
   }
   $('#acessosBox').hidden = !ehAdminNuvem(); if (ehAdminNuvem()) renderAcessos();
+  renderRondasCfg();
   $('#pinBox').hidden = naNuvem();
   $('#pinState').textContent = CFG.pin ? 'PIN ativo: editar cadastro, importar e apagar exigem o PIN.' : 'Sem PIN: qualquer pessoa com o celular pode editar o cadastro.';
   $('#btnPin').textContent = CFG.pin ? 'Trocar PIN' : 'Definir PIN'; $('#btnPinOff').hidden = !CFG.pin;
@@ -595,7 +629,7 @@ function renderMais() {
   $('#btnOldLogs').hidden = naNuvem() && !ehAdminNuvem();
   $('#btnWipe').hidden = naNuvem();
   $('#btnMigrar').hidden = true;
-  if (naNuvem() && podeGerir()) Dados.contarLocal().then((l) => { const n = l.veiculos.length + l.alertas.length + l.agendados.length + l.viaturas.length; const b = $('#btnMigrar'); b.hidden = !n; b.textContent = `Enviar para a nuvem o cadastro deste aparelho (${n})`; }).catch(() => {});
+  if (naNuvem() && podeGerir()) Dados.contarLocal().then((l) => { const n = l.veiculos.length + l.alertas.length + l.agendados.length + l.viaturas.length + l.pontos.length; const b = $('#btnMigrar'); b.hidden = !n; b.textContent = `Enviar para a nuvem o cadastro deste aparelho (${n})`; }).catch(() => {});
   const fotos = [...Dados.V.values()].filter((v) => v.foto).length;
   $('#dbInfo').textContent = `${Dados.V.size} veículos (${fotos} com foto) · ${Dados.T.size} viaturas · ${Dados.G.size} agendamentos · ${Dados.A.size} na lista de alerta · ${Dados.R.length} registros recentes`;
 }
@@ -606,7 +640,7 @@ async function renderAcessos() {
   const box = $('#acessosBox'); box.innerHTML = '<h3>Acessos ao Portão</h3><p class="count"><span class="spin"></span> Carregando…</p>';
   try {
     const { pendentes, contas } = await Dados.listarAcessos();
-    const papelSel = (c) => `<select data-papel="${esc(c.email)}" aria-label="Papel de ${esc(c.email)}"><option value="sentinela" ${c.papel === 'sentinela' ? 'selected' : ''}>Sentinela</option><option value="gestor" ${c.papel === 'gestor' ? 'selected' : ''}>Gestor</option></select>`;
+    const papelSel = (c) => `<select data-papel="${esc(c.email)}" aria-label="Papel de ${esc(c.email)}"><option value="sentinela" ${c.papel === 'sentinela' ? 'selected' : ''}>Sentinela</option><option value="gestor" ${c.papel === 'gestor' ? 'selected' : ''}>Gestor</option><option value="comando" ${c.papel === 'comando' ? 'selected' : ''}>Comando (consulta)</option></select>`;
     const gerais = contas.filter((c) => c.geral), pessoais = contas.filter((c) => !c.geral);
     box.innerHTML = `<h3>Acessos ao Portão</h3>
       <p>Sentinela consulta e registra; gestor também edita cadastro, viaturas, agendados e lista de alerta.</p>
@@ -654,7 +688,7 @@ function criarUsuarioUI(geral) {
       <label class="f" for="cuEmail">E-mail de login *<input type="email" id="cuEmail" autocomplete="off" placeholder="${geral ? 'Ex.: guarda.apmg@gmail.com' : 'nome@exemplo.com'}"></label>
       <label class="f" for="cuSenha">Senha * (mínimo 6 caracteres)<input type="text" id="cuSenha" autocomplete="new-password" minlength="6"></label>
       <div class="grid2">
-        <label class="f" for="cuPapel">Papel<select id="cuPapel"><option value="sentinela">Sentinela</option><option value="gestor">Gestor</option></select></label>
+        <label class="f" for="cuPapel">Papel<select id="cuPapel"><option value="sentinela">Sentinela</option><option value="gestor">Gestor</option><option value="comando">Comando (só consulta)</option></select></label>
         ${geral ? '<label class="f" for="cuMax">Celulares permitidos<input type="number" id="cuMax" min="1" max="6" value="2"></label>' : ''}
       </div>
       ${geral ? '' : '<p class="count">Use um e-mail real: é por ele que a pessoa recupera a senha.</p>'}
@@ -698,13 +732,13 @@ $('#btnMigrar').onclick = async () => {
   if (!await needGestor()) return;
   const l = await Dados.contarLocal();
   if (!await ask({ title: 'Enviar para a nuvem?', msg: `${l.veiculos.length} veículos, ${l.viaturas.length} viaturas, ${l.agendados.length} agendamentos e ${l.alertas.length} alertas deste aparelho vão para a nuvem. Itens iguais serão substituídos.`, ok: 'Enviar' })) return;
-  for (const c of ['veiculos', 'viaturas', 'agendados', 'alertas']) { await Dados.salvarVarios(c, l[c]); await Dados.idbClear(c); }
+  for (const c of ['veiculos', 'viaturas', 'agendados', 'alertas', 'pontos']) { await Dados.salvarVarios(c, l[c]); await Dados.idbClear(c); }
   toast('Cadastro enviado para a nuvem'); renderMais();
 };
 $('#btnBackup').onclick = async () => {
   if (!await needGestor()) return;
   const registros = naNuvem() ? Dados.R : await Dados.idbAll('registros');
-  const data = { app: 'portao-apmg', versao: 2, geradoEm: new Date().toISOString(), veiculos: [...Dados.V.values()], alertas: [...Dados.A.values()], agendados: [...Dados.G.values()], viaturas: [...Dados.T.values()], registros };
+  const data = { app: 'portao-apmg', versao: 2, geradoEm: new Date().toISOString(), veiculos: [...Dados.V.values()], alertas: [...Dados.A.values()], agendados: [...Dados.G.values()], viaturas: [...Dados.T.values()], pontos: [...Dados.P.values()], configuracao: Dados.C, registros };
   download('backup-portao-apmg-' + hojeISO() + '.json', JSON.stringify(data), 'application/json'); toast('Backup salvo em Downloads');
 };
 $('#restoreIn').onchange = async (e) => {
@@ -713,7 +747,7 @@ $('#restoreIn').onchange = async (e) => {
     const d = JSON.parse(await f.text()); if (d.app !== 'portao-apmg') throw new Error('arquivo');
     const n = (k) => (d[k] || []).length;
     if (!await ask({ title: 'Restaurar backup?', msg: `${n('veiculos')} veículos, ${n('agendados')} agendamentos, ${n('alertas')} alertas${naNuvem() ? '' : ' e ' + n('registros') + ' registros'} serão juntados aos dados atuais. Itens iguais serão substituídos.`, ok: 'Restaurar' })) return;
-    await Dados.salvarVarios('veiculos', d.veiculos || []); await Dados.salvarVarios('alertas', d.alertas || []); await Dados.salvarVarios('agendados', d.agendados || []); await Dados.salvarVarios('viaturas', d.viaturas || []);
+    await Dados.salvarVarios('veiculos', d.veiculos || []); await Dados.salvarVarios('alertas', d.alertas || []); await Dados.salvarVarios('agendados', d.agendados || []); await Dados.salvarVarios('viaturas', d.viaturas || []); await Dados.salvarVarios('pontos', d.pontos || []); if (d.configuracao) await Dados.salvarConf(d.configuracao);
     if (!naNuvem()) {
       const have = new Set((await Dados.idbAll('registros')).map((r) => r.ts + (r.chave || r.placa) + r.tipo));
       await Dados.idbPutMany('registros', (d.registros || []).filter((r) => !have.has(r.ts + (r.chave || r.placa) + r.tipo)).map(({ id, ...r }) => ({ kind: 'veiculo', chave: r.placa, ...r })));
@@ -733,7 +767,7 @@ $('#btnWipe').onclick = async () => {
   if (!await needPin()) return;
   const v = await ask({ title: 'Apagar tudo?', msg: 'Cadastro, fotos, agendados, lista de alerta e livro serão apagados deste celular. Digite APAGAR para confirmar.', ok: 'Apagar tudo', danger: true, input: { ph: 'APAGAR' } });
   if (v === null) return; if (v.trim().toUpperCase() !== 'APAGAR') { toast('Nada foi apagado'); return; }
-  for (const s of ['veiculos', 'registros', 'alertas', 'agendados', 'viaturas']) await Dados.idbClear(s);
+  for (const s of ['veiculos', 'registros', 'alertas', 'agendados', 'viaturas', 'pontos']) await Dados.idbClear(s);
   await Dados.iniciarLocal(); toast('Tudo apagado');
 };
 
@@ -754,12 +788,29 @@ function renderHeader() {
 }
 let rptTimer;
 function refreshAll(what) {
-  renderHeader(); checarPermanencia();
+  renderHeader(); checarPermanencia(); checarRondas();
   if (cur === 'portao') renderPortao();
+  if (cur === 'painel') renderPainel();
   if (cur === 'cadastro') renderCadastro();
   if (cur === 'livro') renderLivro();
   if (cur === 'relatorios' && (!what || what === 'registros')) { clearTimeout(rptTimer); rptTimer = setTimeout(renderRelatorios, what ? 800 : 0); }
-  if (cur === 'mais' && (!what || what === 'sync' || what === 'tudo')) renderMais();
+  if (cur === 'mais' && (!what || ['sync', 'tudo', 'pontos', 'config'].includes(what))) { if (what === 'pontos' || what === 'config') renderRondasCfg(); else renderMais(); }
+}
+let rondaAvisadas = '';
+function checarRondas() {
+  const rd = Dados.modo ? rondasAtrasadas() : [], b = $('#rondaBanner');
+  b.hidden = !rd.length;
+  b.innerHTML = rd.length ? `<span>Ronda atrasada: ${esc(rd.slice(0, 3).map((x) => x.p.nome).join(', '))}${rd.length > 3 ? '…' : ''}</span><span>Ronda</span>` : '';
+  const chave = rd.map((x) => x.p.id).join(',');
+  if (chave && chave !== rondaAvisadas && Dados.prontoR && rondaAvisadas !== null) { if (rondaAvisadas) { alertFx('warn', CFG.som); toast('Ronda atrasada', 4000); } }
+  rondaAvisadas = chave;
+}
+/** Papel "comando": só painel, livro, relatórios e Mais. */
+function aplicarPapel() {
+  const cmd = Dados.papel === 'comando';
+  document.body.classList.toggle('comando', cmd);
+  $('.tab[data-v="painel"]').hidden = !cmd; $('.tab[data-v="portao"]').hidden = cmd; $('.tab[data-v="cadastro"]').hidden = cmd;
+  if (cmd && (cur === 'portao' || cur === 'cadastro')) go('painel');
 }
 Dados.on((what) => {
   if (what === 'negado') { toast('A nuvem recusou o acesso. O administrador precisa publicar as regras do Firestore e liberar sua conta.', 7000); return; }
@@ -845,7 +896,7 @@ async function contaMudou(u, avisarPendente) {
       hideGate(); Dados.geral = !!s.geral;
       // conta geral: o nome do sentinela vale por um serviço (12 h); depois o app pergunta de novo
       if (s.geral && Date.now() - (CFG.sentinelaEm || 0) > 12 * 36e5) { CFG.sentinela = ''; await saveCfg(); }
-      await Dados.iniciarNuvem(u, s.papel);
+      await Dados.iniciarNuvem(u, s.papel); aplicarPapel();
       if (s.geral) setTimeout(garantirSentinela, 400);
     }
   } catch (e) { gateErro(mensagemErro(e)); }
@@ -872,11 +923,15 @@ async function seed() {
 }
 async function seedVtr() {
   await Dados.idbPutMany('viaturas', [{ id: 'EX101', prefixo: 'EX-101', placa: 'PMP1R23', tipo: 'Caminhonete', marca: 'Toyota', modelo: 'Hilux', cor: 'Caracterizada', kmAtual: 48210, ativo: true, exemplo: true, criadoEm: Date.now() }]);
-  CFG.seededVtr = true; await saveCfg();
+  CFG.seededVtr = true; await seedPontos();
+}
+async function seedPontos() {
+  await Dados.idbPutMany('pontos', [{ id: 'ex-pt1', nome: 'Exemplo — Muro dos fundos', ordem: 1, ativo: true, exemplo: true }, { id: 'ex-pt2', nome: 'Exemplo — Garagem das viaturas', ordem: 2, ativo: true, exemplo: true }]);
+  CFG.seededPts = true; await saveCfg();
 }
 async function iniciarModo() {
   if (CFG.modo === 'local' || !Dados.configurado()) {
-    hideGate(); if (!CFG.seeded) await seed(); else if (!CFG.seededVtr) await seedVtr(); await Dados.iniciarLocal(); return;
+    hideGate(); if (!CFG.seeded) await seed(); else if (!CFG.seededVtr) await seedVtr(); else if (!CFG.seededPts) await seedPontos(); await Dados.iniciarLocal(); return;
   }
   gateCarregando('Conectando à nuvem…');
   try { const { auth, a } = await Dados.carregarFB(); auth.onAuthStateChanged(a, (u) => contaMudou(u)); }

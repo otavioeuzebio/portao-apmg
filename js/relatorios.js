@@ -43,6 +43,8 @@ function rptCalc(rows, a, b) {
   const permVis = perm.filter((x) => x.e.kind === 'pessoa' || ['nao', 'agend', 'agendfora'].includes(x.e.resultado));
   const pico = porHora.indexOf(Math.max(...porHora));
   return {
+    ocPosto: rows.filter((r) => r.kind === 'ocorrencia'), rondas: rows.filter((r) => r.kind === 'ronda'),
+    rondaPontos: [...rows.filter((r) => r.kind === 'ronda').reduce((m, r) => { const x = m.get(r.pontoId) || { nome: r.nome, n: 0, manual: 0, ultima: 0 }; x.n++; if (r.origem === 'manual') x.manual++; x.ultima = Math.max(x.ultima, r.ts); m.set(r.pontoId, x); return m; }, new Map()).values()].sort((a, b) => a.nome.localeCompare(b.nome)),
     rows, ent, sai, entV, entP, visit, naoCad, ocorr, dias, porDia, porHora, pico, rap, vm, vtrLista,
     vtrSaidas: vm.filter((r) => r.tipo === 'saida').length, vtrKm: vtrLista.reduce((s, v) => s + v.km, 0),
     apps: rap.filter((r) => r.resultado === 'app').length, entregas: rap.filter((r) => r.resultado === 'entrega').length,
@@ -100,7 +102,13 @@ async function renderRelatorios() {
     <h3 class="sec">Viaturas</h3>
     ${D.vtrLista.length ? `<div class="tablewrap"><table class="rtable"><thead><tr><th>Viatura</th><th class="n">Saídas</th><th class="n">KM</th><th>Motoristas</th></tr></thead><tbody>
       ${D.vtrLista.map((v) => `<tr><td>${esc(v.nome)}</td><td class="n">${v.saidas}</td><td class="n">${fmtKm(v.km)}</td><td>${esc(v.motoristas)}</td></tr>`).join('')}</tbody></table></div>` : '<p class="empty">Nenhuma movimentação de viatura no período.</p>'}
-    <h3 class="sec">Ocorrências</h3>
+    <h3 class="sec">Ocorrências do posto (${D.ocPosto.length})</h3>
+    ${D.ocPosto.length ? `<div class="tablewrap"><table class="rtable"><thead><tr><th>Data</th><th>Tipo</th><th>Descrição</th></tr></thead><tbody>
+      ${D.ocPosto.slice(-80).reverse().map((r) => `<tr><td>${fmtDT(r.ts)}</td><td>${esc(r.categoria || '')}</td><td>${esc(r.obs || '')}</td></tr>`).join('')}</tbody></table></div>` : '<p class="empty">Nenhuma ocorrência registrada no período.</p>'}
+    <h3 class="sec">Rondas (${D.rondas.length} passagens)</h3>
+    ${D.rondaPontos.length ? `<div class="tablewrap"><table class="rtable"><thead><tr><th>Ponto</th><th class="n">Passagens</th><th class="n">Sem QR</th><th>Última</th></tr></thead><tbody>
+      ${D.rondaPontos.map((x) => `<tr><td>${esc(x.nome)}</td><td class="n">${x.n}</td><td class="n">${x.manual}</td><td>${fmtDT(x.ultima)}</td></tr>`).join('')}</tbody></table></div>` : '<p class="empty">Nenhuma ronda no período.</p>'}
+    <h3 class="sec">Bloqueios e alertas</h3>
     ${D.ocorr.length ? `<div class="tablewrap"><table class="rtable"><thead><tr><th>Data</th><th>Placa / pessoa</th><th>Situação</th><th>Obs.</th></tr></thead><tbody>
       ${D.ocorr.slice(-60).reverse().map((r) => `<tr><td>${fmtDT(r.ts)}</td><td>${esc(r.placa || r.nome)}</td><td>${r.alerta ? 'Lista de alerta' : esc(RES_TXT[r.resultado] || '')}</td><td>${esc(r.obs || '')}</td></tr>`).join('')}</tbody></table></div>`
       : '<p class="empty">Nenhum bloqueio, alerta ou cadastro vencido no período.</p>'}
@@ -111,10 +119,11 @@ async function renderRelatorios() {
   $('#rptPdf').onclick = rptPDF; $('#rptXls').onclick = rptXLS;
 }
 function rptLinhas(D) {
-  return D.rows.map((r) => [fmtD(isoOf(new Date(r.ts))), fmtH(r.ts), r.kind === 'viatura' ? (r.tipo === 'entrada' ? 'Retorno' : 'Saída') : r.tipo === 'entrada' ? 'Entrada' : 'Saída',
-    r.kind === 'viatura' ? 'Viatura' : r.kind === 'pessoa' ? 'Pedestre' : 'Veículo',
-    r.kind === 'viatura' ? (r.prefixo ? 'VTR ' + r.prefixo : '') + (r.placa ? ' ' + r.placa : '') : r.placa || '', r.nome || '', r.documento || '',
-    r.kind === 'viatura' ? 'KM ' + (r.km ?? '') + (r.kmRodados != null ? ' (' + r.kmRodados + ' km)' : '') : [r.empresa, r.veiculo].filter(Boolean).join(' — '),
+  return D.rows.map((r) => [fmtD(isoOf(new Date(r.ts))), fmtH(r.ts),
+    r.kind === 'ocorrencia' ? 'Ocorrência' : r.kind === 'ronda' ? 'Ronda' : r.kind === 'viatura' ? (r.tipo === 'entrada' ? 'Retorno' : 'Saída') : r.tipo === 'entrada' ? 'Entrada' : 'Saída',
+    r.kind === 'ocorrencia' ? (r.categoria || '') : r.kind === 'ronda' ? (r.origem === 'manual' ? 'Sem QR' : 'QR Code') : r.kind === 'viatura' ? 'Viatura' : r.resultado === 'vtrext' ? 'VTR ' + (r.empresa || 'externa') : r.kind === 'pessoa' ? 'Pedestre' : 'Veículo',
+    r.kind === 'viatura' || r.resultado === 'vtrext' ? (r.prefixo ? 'VTR ' + r.prefixo : '') + (r.placa ? ' ' + r.placa : '') : r.placa || '', r.nome || '', r.documento || '',
+    r.kind === 'viatura' ? ['KM ' + (r.km ?? '') + (r.kmRodados != null ? ' (' + r.kmRodados + ' km)' : ''), r.combustivel ? 'comb. ' + r.combustivel : '', (r.faltando || []).length ? 'faltando: ' + r.faltando.join(', ') : '', r.avarias ? 'avarias: ' + r.avarias : ''].filter(Boolean).join('; ') : [r.empresa, r.veiculo].filter(Boolean).join(' — '),
     r.alerta ? 'Lista de alerta' : (RES_TXT[r.resultado] || ''), r.sentinela || '', [r.destino, r.obs].filter(Boolean).join(' — ')]);
 }
 const RPT_COLS = ['Data', 'Hora', 'Movimento', 'Tipo', 'Placa / viatura', 'Nome / motorista', 'Documento', 'Veículo / KM', 'Situação', 'Sentinela', 'Destino / obs.'];
@@ -131,6 +140,8 @@ async function rptXLS() {
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['Data', 'Entradas'], ...D.dias.map((d) => [fmtD(d), D.porDia.get(d) || 0])]), 'Por dia');
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['Hora', 'Entradas'], ...D.porHora.map((v, h) => [pad(h) + 'h', v])]), 'Por hora');
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['Data', 'Hora', 'Placa/pessoa', 'Situação', 'Obs.'], ...D.ocorr.map((r) => [fmtD(isoOf(new Date(r.ts))), fmtH(r.ts), r.placa || r.nome, r.alerta ? 'Lista de alerta' : RES_TXT[r.resultado] || '', r.obs || ''])]), 'Ocorrências');
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['Data', 'Hora', 'Tipo', 'Descrição', 'Sentinela'], ...D.ocPosto.map((r) => [fmtD(isoOf(new Date(r.ts))), fmtH(r.ts), r.categoria || '', r.obs || '', r.sentinela || ''])]), 'Ocorrências do posto');
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['Data', 'Hora', 'Ponto', 'Forma', 'Sentinela', 'Obs.'], ...D.rondas.map((r) => [fmtD(isoOf(new Date(r.ts))), fmtH(r.ts), r.nome || '', r.origem === 'manual' ? 'Sem QR' : 'QR Code', r.sentinela || '', r.obs || ''])]), 'Rondas');
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['Viatura', 'Placa', 'Saídas', 'KM rodados', 'Motoristas'], ...D.vtrLista.map((v) => [v.nome, v.placa, v.saidas, v.km, v.motoristas])]), 'Viaturas');
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['Data', 'Hora', 'Movimento', 'Viatura', 'Motorista', 'RG/matrícula', 'KM', 'KM inicial', 'KM rodados', 'Destino', 'Sentinela', 'Obs.'],
     ...D.vm.map((r) => [fmtD(isoOf(new Date(r.ts))), fmtH(r.ts), r.tipo === 'saida' ? 'Saída' : 'Retorno', r.prefixo ? 'VTR ' + r.prefixo : r.placa, r.motorista || '', r.documento || '', r.km ?? '', r.kmInicial ?? '', r.kmRodados ?? '', r.destino || '', r.sentinela || '', r.obs || ''])]), 'Viaturas — movimentos');
@@ -168,9 +179,15 @@ async function rptPDF() {
   sec('Entradas por dia');
   doc.autoTable({ startY: y, theme: 'striped', head: [['Data', 'Entradas']], headStyles: { fillColor: azul }, styles: { fontSize: 8 }, margin: { left: 14, right: 120 },
     body: D.dias.map((d) => [fmtD(d), D.porDia.get(d) || 0]) });
-  y = doc.lastAutoTable.finalY + 8; sec('Ocorrências');
+  y = doc.lastAutoTable.finalY + 8; sec('Bloqueios e alertas');
   doc.autoTable({ startY: y, theme: 'striped', head: [['Data', 'Hora', 'Placa / pessoa', 'Situação', 'Obs.']], headStyles: { fillColor: azul }, styles: { fontSize: 8 },
     body: D.ocorr.length ? D.ocorr.map((r) => [fmtD(isoOf(new Date(r.ts))), fmtH(r.ts), r.placa || r.nome, r.alerta ? 'Lista de alerta' : RES_TXT[r.resultado] || '', r.obs || '']) : [['—', '', 'Nenhuma ocorrência no período', '', '']] });
+  y = doc.lastAutoTable.finalY + 8; sec('Ocorrências do posto');
+  doc.autoTable({ startY: y, theme: 'striped', head: [['Data', 'Hora', 'Tipo', 'Descrição']], headStyles: { fillColor: azul }, styles: { fontSize: 8 }, columnStyles: { 3: { cellWidth: 100 } },
+    body: D.ocPosto.length ? D.ocPosto.map((r) => [fmtD(isoOf(new Date(r.ts))), fmtH(r.ts), r.categoria || '', r.obs || '']) : [['—', '', '', 'Nenhuma ocorrência no período']] });
+  y = doc.lastAutoTable.finalY + 8; sec('Rondas');
+  doc.autoTable({ startY: y, theme: 'striped', head: [['Ponto', 'Passagens', 'Sem QR', 'Última']], headStyles: { fillColor: azul }, styles: { fontSize: 8 },
+    body: D.rondaPontos.length ? D.rondaPontos.map((x) => [x.nome, x.n, x.manual, fmtDT(x.ultima)]) : [['—', '', '', 'Nenhuma ronda no período']] });
   y = doc.lastAutoTable.finalY + 8; sec('Viaturas');
   doc.autoTable({ startY: y, theme: 'striped', head: [['Viatura', 'Placa', 'Saídas', 'KM rodados', 'Motoristas']], headStyles: { fillColor: azul }, styles: { fontSize: 8 },
     body: D.vtrLista.length ? D.vtrLista.map((v) => [v.nome, v.placa, v.saidas, fmtKm(v.km), v.motoristas]) : [['—', '', '', '', 'Sem movimentação no período']] });

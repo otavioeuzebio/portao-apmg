@@ -19,6 +19,17 @@ https://otavioeuzebio.github.io/portao-apmg/
   KM rodados na passagem de serviço e nos relatórios.
 - **Cadastro rápido de Uber/app e entregadores** (iFood, Correios etc.), com limite de permanência próprio em minutos.
   Placa em lista de alerta ou bloqueada abre a consulta normal antes.
+- **Checklist da viatura** na saída e no retorno: combustível, itens (lista editável por viatura), avarias com foto;
+  o app aponta o que saiu com a viatura e voltou faltando.
+- **Viaturas de outras unidades pelo prefixo**: o campo de consulta aceita placa ou prefixo; prefixo desconhecido abre o
+  registro de entrada com unidade/OPM e motorista.
+- **Ocorrências do posto** (defeito, energia, suspeito, visita de autoridade…) com foto, na passagem e nos relatórios.
+- **Rondas com QR Code**: pontos cadastrados em Mais → Rondas, folha de QR em PDF para imprimir, leitura pela câmera,
+  registro "sem QR" com motivo e aviso de ponto atrasado.
+- **Visitantes frequentes**: agendamento que repete nos dias da semana marcados, com validade.
+- **Vagas do pátio**: contador de vagas de visitantes, com confirmação quando lotado.
+- **Painel do comando**: sentinela de serviço, quem está no local, viaturas fora, alertas, permanências, rondas e
+  ocorrências do dia. Papel **comando** (só consulta) vê painel, livro e relatórios.
 - **Alertas de permanência**: aviso quando visitante ou veículo passa do tempo (configurável) ou do horário agendado.
 - **Livro** de entradas e saídas, "no local agora", **passagem de serviço** pronta para copiar/enviar e CSV do dia.
 - **Relatórios para o comando**: entradas por dia e por hora (pico), visitantes, pedestres, ocorrências, veículos mais
